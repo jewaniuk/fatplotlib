@@ -3,6 +3,8 @@ name = "fig"
 version = "0.1.0"
 description = "modern tooling for preparing academic figures, not just plots"
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [
     { name = "jewaniuk", email = "jacob.ewaniuk@queensu.ca" }
 ]
