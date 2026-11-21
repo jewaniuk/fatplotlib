@@ -151,7 +151,7 @@ class Shape(Node):
 
     def _pad(self) -> float:
         """Half the stroke width, the distance the outline reaches past the geometry."""
-        return 0.0 if self.stroke is None else LIGHT.resolve(self.stroke.width) / 2
+        return 0.0 if self.stroke is None else LIGHT.number(self.stroke.width) / 2
 
 
 @dataclass(slots=True)

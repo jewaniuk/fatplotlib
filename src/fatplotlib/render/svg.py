@@ -50,11 +50,11 @@ def _resolved(node: Node, theme: Theme) -> Node:
 
     def paint(value: Paint | None) -> Paint | None:
         if isinstance(value, RadialGradient):
-            stops = tuple(replace(stop, colour=theme.resolve(stop.colour)) for stop in value.stops)
+            stops = tuple(replace(stop, colour=theme.colour(stop.colour)) for stop in value.stops)
             return replace(value, stops=stops)
-        return theme.resolve(value)
+        return value if value is None else theme.colour(value)
 
-    changes = {"alpha": theme.resolve(node.alpha)}
+    changes: dict[str, object] = {"alpha": theme.number(node.alpha)}
     match node:
         case Group():
             changes["children"] = [_resolved(child, theme) for child in node.children]
@@ -62,7 +62,7 @@ def _resolved(node: Node, theme: Theme) -> Node:
             changes["fill"] = paint(node.fill)
             if node.stroke is not None:
                 stroke = node.stroke
-                changes["stroke"] = replace(stroke, paint=paint(stroke.paint), width=theme.resolve(stroke.width))
+                changes["stroke"] = replace(stroke, paint=paint(stroke.paint), width=theme.number(stroke.width))
         case Text():
             changes["fill"] = paint(node.fill)
     return replace(node, **changes)

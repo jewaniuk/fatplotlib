@@ -16,12 +16,14 @@ def scene() -> Group:
 
 def test_resolve_and_with():
     teal = DARK.with_(accent_teal="#5fd3c6")
-    assert teal.resolve(Token("accent_teal")) == "#5fd3c6"
-    assert teal.resolve(Token("fg")) == DARK.resolve(Token("fg"))
+    assert teal.colour(Token("accent_teal")) == "#5fd3c6"
+    assert teal.colour(Token("fg")) == DARK.colour(Token("fg"))
     assert teal.name == "dark" and DARK.with_("slides").name == "slides"
-    assert LIGHT.resolve(0.5) == 0.5
+    assert LIGHT.number(0.5) == 0.5
     with pytest.raises(KeyError, match="accent_teal"):
-        DARK.resolve(Token("accent_teal"))
+        DARK.colour(Token("accent_teal"))
+    with pytest.raises(TypeError, match="thin"):
+        DARK.colour(Token("thin"))
 
 
 def test_preview_keeps_tokens_as_css_variables():

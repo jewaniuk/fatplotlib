@@ -39,24 +39,47 @@ class Theme:
         """
         return Theme(name or self.name, MappingProxyType({**self.tokens, **tokens}))
 
-    def resolve[T](self, value: T | Token) -> T | Value:
-        """The literal behind a token, or the value itself if it is not a token.
+    def colour(self, value: str | Token) -> str:
+        """The colour behind a token, or the colour itself.
 
         Args:
-            value (T | Token): a token or a literal.
+            value (str | Token): a colour token or a literal colour.
 
         Returns:
-            T | Value: the literal.
+            str: the colour.
 
         Raises:
             KeyError: the theme has no such token.
+            TypeError: the token holds a number.
         """
+        return self._resolve(value, str)
+
+    def number(self, value: float | Token) -> float:
+        """The alpha or weight behind a token, or the number itself.
+
+        Args:
+            value (float | Token): an alpha or weight token, or a literal number.
+
+        Returns:
+            float: the number.
+
+        Raises:
+            KeyError: the theme has no such token.
+            TypeError: the token holds a colour.
+        """
+        return self._resolve(value, (int, float))
+
+    def _resolve[T](self, value: T | Token, kind: type[T] | tuple[type, ...]) -> T:
+        """A token's value checked against the kind the caller needs, or a literal unchanged."""
         if not isinstance(value, Token):
             return value
         try:
-            return self.tokens[value.name]
+            resolved = self.tokens[value.name]
         except KeyError:
             raise KeyError(f"theme {self.name!r} has no token {value.name!r}") from None
+        if not isinstance(resolved, kind):
+            raise TypeError(f"token {value.name!r} holds {resolved!r}, which is not a {'colour' if kind is str else 'number'}")
+        return resolved  # pyright: ignore[reportReturnType]
 
     def css(self, selector: str) -> str:
         """A css rule defining every token as a custom property.
