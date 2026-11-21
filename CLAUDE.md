@@ -6,3 +6,4 @@ python library for academic figures that mix schematics, diagrams and data plots
 
 - the design plan lives in `planning/PLAN.md` (local only, gitignored). read the sections a task needs rather than the whole file
 - `uv` manages the environment: `uv run`, `uv add`
+- code mode is mostly agent. after each change, end with a read-in-order walkthrough: files and functions added or changed, in the order to review them in neovim, with one line each on why they sit where they do
