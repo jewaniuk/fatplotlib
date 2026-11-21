@@ -74,10 +74,14 @@ def typeset(markup: str, size: float, font: str | None = None) -> TextShape:
         f"{font_rule}"
         f'#box(width: 0pt, text(fill: rgb("{MARKER}"))[x]);{markup}'
     )
-    svg = _COMPILER.compile(input=source.encode(), format="svg").decode()
+    output = _COMPILER.compile(input=source.encode(), format="svg")
+    # one page in, so one svg out; typst's own output, so the patterns below always match
+    assert isinstance(output, bytes)
+    svg = output.decode()
 
-    width, height = map(float, _VIEWBOX.search(svg).groups())
-    marker = _MARKER_GLYPH.search(svg)
+    viewbox, marker = _VIEWBOX.search(svg), _MARKER_GLYPH.search(svg)
+    assert viewbox is not None and marker is not None
+    width, height = map(float, viewbox.groups())
     baseline, marker_id = float(marker[1] or 0) + float(marker[2]), marker[3]
     svg = svg[: marker.start()] + svg[marker.end() :]
 

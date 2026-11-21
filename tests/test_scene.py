@@ -23,4 +23,5 @@ def test_group_bbox_applies_transform():
     line = PathBuilder().move_to(0, 0).rel_line_to(2, 0).path()
     group = Group([line], transform=Affine.rotate(math.pi / 2))
     box = group.bbox()
+    assert box is not None
     assert math.isclose(box.x0, 0, abs_tol=1e-12) and math.isclose(box.y1, 2)

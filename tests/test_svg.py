@@ -39,7 +39,9 @@ def test_defs_are_deduplicated_and_stable():
     svg = render(scene(), 70, 60)
     root = ET.fromstring(svg)
     ns = {"svg": "http://www.w3.org/2000/svg"}
-    ids = [el.get("id") for el in root.find("svg:defs", ns)]
+    defs = root.find("svg:defs", ns)
+    assert defs is not None
+    ids = [el.get("id") for el in defs]
     assert len(ids) == len(set(ids))
     assert len(root.findall("svg:defs/svg:radialGradient", ns)) == 1
     assert render(scene(), 70, 60) == svg

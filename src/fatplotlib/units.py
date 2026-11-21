@@ -26,7 +26,7 @@ def length(value: float | str, em: float | None = None) -> float:
         float: the length in pt.
 
     Raises:
-        ValueError: if a string length does not parse or names an unknown unit.
+        ValueError: if a string length does not parse, names an unknown unit, or is in em with no `em`.
     """
     if not isinstance(value, str):
         return float(value)
@@ -34,4 +34,8 @@ def length(value: float | str, em: float | None = None) -> float:
     if match is None or (match[2] not in _UNITS and match[2] != "em"):
         raise ValueError(f"not a length: {value!r}")
     number, unit = float(match[1]), match[2]
-    return number * em if unit == "em" else number * _UNITS[unit]
+    if unit != "em":
+        return number * _UNITS[unit]
+    if em is None:
+        raise ValueError(f"{value!r} needs a font size (em)")
+    return number * em
