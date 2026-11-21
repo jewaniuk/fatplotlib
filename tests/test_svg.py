@@ -1,0 +1,44 @@
+"""svg rendering."""
+
+import xml.etree.ElementTree as ET
+
+import resvg_py
+
+from fatplotlib.paths import PathBuilder
+from fatplotlib.render.svg import render
+from fatplotlib.scene import Circle, Group, Rect, Text
+from fatplotlib.style import RadialGradient, Stop, Stroke, with_alpha
+from fatplotlib.transform import Affine
+
+
+def scene() -> Group:
+    """One of each node, two photons sharing a gradient and two labels sharing glyphs."""
+    glow = RadialGradient((Stop(0, "#ffffff"), Stop(1, "#1f77b4", alpha=0.7)))
+    wisp = PathBuilder().move_to(10, 10).line_to(30, 14).rel_cubic_to(5, 5, 10, -5, 15, 0)
+    return Group(
+        [
+            Rect(5, 5, 60, 40, radius=3, fill=with_alpha("#1f77b4", 0.05), stroke=Stroke("#1f77b4", 0.5)),
+            wisp.path(stroke=Stroke("#1f77b4", 0.3, dash=(1, 1)), id="wisp"),
+            Group([Circle(20, 30, 3, fill=glow), Circle(40, 30, 3, fill=glow)], transform=Affine.translate(1, 0)),
+            Text("Photons $10^(-2)$", 35, 50, size=8, anchor="middle"),
+            Text("Photons", 35, 2, size=8, anchor="middle", fill="#d62728"),
+        ],
+        class_="panel",
+    )
+
+
+def test_svg_parses_and_renders_in_resvg():
+    svg = render(scene(), 70, 60)
+    ET.fromstring(svg)
+    png = resvg_py.svg_to_bytes(svg_string=svg, dpi=72)  # dpi 0 (the default) cannot size pt units
+    assert bytes(png[:8]) == b"\x89PNG\r\n\x1a\n"
+
+
+def test_defs_are_deduplicated_and_stable():
+    svg = render(scene(), 70, 60)
+    root = ET.fromstring(svg)
+    ns = {"svg": "http://www.w3.org/2000/svg"}
+    ids = [el.get("id") for el in root.find("svg:defs", ns)]
+    assert len(ids) == len(set(ids))
+    assert len(root.findall("svg:defs/svg:radialGradient", ns)) == 1
+    assert render(scene(), 70, 60) == svg
