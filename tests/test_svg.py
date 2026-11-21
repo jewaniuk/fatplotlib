@@ -8,6 +8,7 @@ from fatplotlib.paths import PathBuilder
 from fatplotlib.render.svg import render
 from fatplotlib.scene import Circle, Group, Rect, Text
 from fatplotlib.style import RadialGradient, Stop, Stroke, with_alpha
+from fatplotlib.theme import LIGHT
 from fatplotlib.transform import Affine
 
 
@@ -28,7 +29,7 @@ def scene() -> Group:
 
 
 def test_svg_parses_and_renders_in_resvg():
-    svg = render(scene(), 70, 60)
+    svg = render(scene(), 70, 60, LIGHT)
     ET.fromstring(svg)
     png = resvg_py.svg_to_bytes(svg_string=svg, dpi=72)  # dpi 0 (the default) cannot size pt units
     assert bytes(png[:8]) == b"\x89PNG\r\n\x1a\n"

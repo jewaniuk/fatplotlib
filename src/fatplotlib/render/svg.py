@@ -3,26 +3,37 @@
 the scene is y-up in pt; one flip at the root maps it to svg's y-down. text groups flip back
 locally. `<defs>` (gradients, typst glyphs) are collected once per document and keyed by a
 content hash or typst's own glyph hash, so ids are stable across runs and duplicates collapse.
+
+without a theme every token becomes a css custom property (`fill:var(--fg)`), which the preview
+defines per theme. with a theme the scene is resolved to literal values first, for export.
 """
 
 import hashlib
+from dataclasses import replace
 from html import escape
 
 from fatplotlib.scene import Circle, Group, Node, Path, Rect, Shape, Text
 from fatplotlib.style import Paint, RadialGradient, Stroke, Token
+from fatplotlib.theme import Theme
 
 
-def render(root: Node, width: float, height: float) -> str:
+def render(root: Node, width: float, height: float, theme: Theme | None = None) -> str:
     """Renders a scene to a standalone svg document.
 
     Args:
         root (Node): the scene, y-up, with the origin at the bottom-left of the page.
         width (float): page width in pt.
         height (float): page height in pt.
+        theme (Theme | None): resolves tokens to literals; None leaves them as css variables.
 
     Returns:
         str: the svg document.
+
+    Raises:
+        KeyError: the scene uses a token the theme does not define.
     """
+    if theme is not None:
+        root = _resolved(root, theme)
     defs: dict[str, str] = {}
     body = _node(root, defs)
     return (
@@ -32,6 +43,29 @@ def render(root: Node, width: float, height: float) -> str:
         f'<g transform="matrix(1 0 0 -1 0 {_num(height)})">{body}</g>'
         "</svg>"
     )
+
+
+def _resolved(node: Node, theme: Theme) -> Node:
+    """A copy of the scene with every token replaced by the theme's value."""
+
+    def paint(value: Paint | None) -> Paint | None:
+        if isinstance(value, RadialGradient):
+            stops = tuple(replace(stop, colour=theme.resolve(stop.colour)) for stop in value.stops)
+            return replace(value, stops=stops)
+        return theme.resolve(value)
+
+    changes = {"alpha": theme.resolve(node.alpha)}
+    match node:
+        case Group():
+            changes["children"] = [_resolved(child, theme) for child in node.children]
+        case Shape():
+            changes["fill"] = paint(node.fill)
+            if node.stroke is not None:
+                stroke = node.stroke
+                changes["stroke"] = replace(stroke, paint=paint(stroke.paint), width=theme.resolve(stroke.width))
+        case Text():
+            changes["fill"] = paint(node.fill)
+    return replace(node, **changes)
 
 
 def _num(value: float) -> str:
@@ -81,7 +115,10 @@ def _stroke(stroke: Stroke | None, defs: dict[str, str]) -> tuple[list[tuple[str
     if stroke is None:
         return [], []
     pairs, style = _paint("stroke", stroke.paint, defs)
-    pairs.append(("stroke-width", _num(stroke.width)))
+    if isinstance(stroke.width, Token):
+        style.append(f"stroke-width:var(--{stroke.width.name})")
+    else:
+        pairs.append(("stroke-width", _num(stroke.width)))
     if stroke.dash is not None:
         pairs.append(("stroke-dasharray", " ".join(_num(d) for d in stroke.dash)))
     if stroke.cap != "butt":
@@ -91,23 +128,26 @@ def _stroke(stroke: Stroke | None, defs: dict[str, str]) -> tuple[list[tuple[str
     return pairs, style
 
 
-def _common(node: Node) -> list[tuple[str, str]]:
-    """Attributes every node may carry: id, class and opacity."""
-    pairs = []
+def _common(node: Node) -> tuple[list[tuple[str, str]], list[str]]:
+    """Attributes and css declarations every node may carry: id, class and opacity."""
+    pairs, style = [], []
     if node.id is not None:
         pairs.append(("id", node.id))
     if node.class_ is not None:
         pairs.append(("class", node.class_))
-    if node.alpha != 1:
+    if isinstance(node.alpha, Token):
+        style.append(f"opacity:var(--{node.alpha.name})")
+    elif node.alpha != 1:
         pairs.append(("opacity", _num(node.alpha)))
-    return pairs
+    return pairs, style
 
 
 def _shape_attrs(node: Shape, geometry: list[tuple[str, str]], defs: dict[str, str]) -> str:
     """Attribute text for a shape: geometry, then fill, outline and common attributes."""
     fill, fill_style = _paint("fill", node.fill, defs)
     stroke, stroke_style = _stroke(node.stroke, defs)
-    return _attrs(geometry + fill + stroke + _common(node), fill_style + stroke_style)
+    common, common_style = _common(node)
+    return _attrs(geometry + fill + stroke + common, fill_style + stroke_style + common_style)
 
 
 def _path_data(node: Path) -> str:
@@ -119,11 +159,11 @@ def _node(node: Node, defs: dict[str, str]) -> str:
     """Svg text for one node and its children, adding what it references to `defs`."""
     match node:
         case Group():
-            pairs = _common(node)
+            pairs, style = _common(node)
             if node.transform is not None:
                 t = node.transform
                 pairs.insert(0, ("transform", f"matrix({' '.join(_num(v) for v in (t.a, t.b, t.c, t.d, t.e, t.f))})"))
-            return f"<g{_attrs(pairs, [])}>{''.join(_node(child, defs) for child in node.children)}</g>"
+            return f"<g{_attrs(pairs, style)}>{''.join(_node(child, defs) for child in node.children)}</g>"
         case Path():
             return f"<path{_shape_attrs(node, [('d', _path_data(node))], defs)}/>"
         case Rect():
@@ -143,7 +183,8 @@ def _node(node: Node, defs: dict[str, str]) -> str:
             # strokes in the text (fraction bars) follow `color`; alpha is per channel, so drop it
             colour, colour_style = _paint("color", node.fill, defs)
             colour = [(name, value) for name, value in colour if name == "color"]
-            pairs = [("transform", f"matrix(1 0 0 -1 {_num(left)} {_num(top)})"), *fill, *colour, *_common(node)]
-            return f"<g{_attrs(pairs, fill_style + colour_style)}>{shape.body}</g>"
+            common, common_style = _common(node)
+            pairs = [("transform", f"matrix(1 0 0 -1 {_num(left)} {_num(top)})"), *fill, *colour, *common]
+            return f"<g{_attrs(pairs, fill_style + colour_style + common_style)}>{shape.body}</g>"
         case _:
             raise TypeError(f"cannot render {type(node).__name__}")

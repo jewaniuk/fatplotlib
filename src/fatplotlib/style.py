@@ -10,7 +10,7 @@ from typing import Literal
 
 @dataclass(frozen=True, slots=True)
 class Token:
-    """A named colour that a theme resolves (light and dark), e.g. `Token("fg")`.
+    """A named value that a theme resolves: a colour (`Token("fg")`), an alpha or a line weight (`Token("thin")`).
 
     Attributes:
         name (str): the token name.
@@ -60,14 +60,14 @@ class Stroke:
 
     Attributes:
         paint (Paint): the stroke paint.
-        width (float): line width in pt.
+        width (float | Token): line width in pt, or a weight token.
         dash (tuple[float, ...] | None): alternating dash and gap lengths in pt, solid if None.
         cap (Literal["butt", "round", "square"]): line ends.
         join (Literal["miter", "round", "bevel"]): line corners.
     """
 
     paint: Paint
-    width: float = 1.0
+    width: float | Token = 1.0
     dash: tuple[float, ...] | None = None
     cap: Literal["butt", "round", "square"] = "butt"
     join: Literal["miter", "round", "bevel"] = "miter"

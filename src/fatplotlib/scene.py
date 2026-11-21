@@ -1,7 +1,8 @@
 """scene nodes: a y-up tree of shapes in pt, which renderers walk.
 
 every node takes an optional `id` and `class_` (the svg `class`), so css and animation can
-address it, and has `bbox()` in its parent's coordinates, stroke included.
+address it, and has `bbox()` in its parent's coordinates, stroke included. geometry must not
+depend on the theme, so `bbox()` reads weight tokens from the light theme.
 """
 
 import math
@@ -9,7 +10,8 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 from fatplotlib import text
-from fatplotlib.style import Paint, Stroke
+from fatplotlib.style import Paint, Stroke, Token
+from fatplotlib.theme import LIGHT
 from fatplotlib.transform import Affine
 
 type Command = (
@@ -119,12 +121,12 @@ class Node:
     Attributes:
         id (str | None): the svg id.
         class_ (str | None): the svg class.
-        alpha (float): opacity of the whole node, 0 to 1.
+        alpha (float | Token): opacity of the whole node, 0 to 1, or an alpha token.
     """
 
     id: str | None = None
     class_: str | None = None
-    alpha: float = 1.0
+    alpha: float | Token = 1.0
 
     def bbox(self) -> BBox | None:
         """The node's extent in its parent's coordinates, stroke included.
@@ -149,7 +151,7 @@ class Shape(Node):
 
     def _pad(self) -> float:
         """Half the stroke width, the distance the outline reaches past the geometry."""
-        return 0.0 if self.stroke is None else self.stroke.width / 2
+        return 0.0 if self.stroke is None else LIGHT.resolve(self.stroke.width) / 2
 
 
 @dataclass(slots=True)
@@ -289,7 +291,7 @@ class Text(Node):
         anchor (Literal["start", "middle", "end"]): which part of the box sits at x.
         valign (Literal["baseline", "top", "middle", "bottom"]): which part of the box sits at y.
         font (str | None): font family, the preamble's if None.
-        fill (Paint): the text colour.
+        fill (Paint): the text colour, the theme's foreground by default.
     """
 
     markup: str
@@ -299,7 +301,7 @@ class Text(Node):
     anchor: Literal["start", "middle", "end"] = "start"
     valign: Literal["baseline", "top", "middle", "bottom"] = "baseline"
     font: str | None = None
-    fill: Paint = "#000000"
+    fill: Paint = Token("fg")
 
     def shape(self) -> text.TextShape:
         """The typeset markup, cached across nodes.
