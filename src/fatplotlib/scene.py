@@ -71,6 +71,18 @@ class BBox:
         """
         return BBox(self.x0 - pad, self.y0 - pad, self.x1 + pad, self.y1 + pad)
 
+    def intersection(self, other: BBox) -> BBox | None:
+        """The overlap of both boxes.
+
+        Args:
+            other (BBox): the other box.
+
+        Returns:
+            BBox | None: the overlap, None if the boxes do not overlap.
+        """
+        box = BBox(max(self.x0, other.x0), max(self.y0, other.y0), min(self.x1, other.x1), min(self.y1, other.y1))
+        return box if box.x0 <= box.x1 and box.y0 <= box.y1 else None
+
     def transformed(self, transform: Affine) -> BBox:
         """The box holding this box's corners after a transform.
 
@@ -156,15 +168,17 @@ class Shape(Node):
 
 @dataclass(slots=True)
 class Group(Node):
-    """A list of nodes under one transform.
+    """A list of nodes under one transform, optionally clipped to a box.
 
     Attributes:
         children (list[Node]): the nodes, drawn in order.
         transform (Affine | None): maps child coordinates to the parent's.
+        clip (BBox | None): the box, in child coordinates, outside which nothing is drawn.
     """
 
     children: list[Node] = field(default_factory=list)
     transform: Affine | None = None
+    clip: BBox | None = None
 
     def add(self, *nodes: Node) -> None:
         """Appends nodes, drawn above the existing ones.
@@ -175,18 +189,22 @@ class Group(Node):
         self.children.extend(nodes)
 
     def bbox(self) -> BBox | None:
-        """The union of the children's boxes in the parent's coordinates.
+        """The union of the children's boxes, cut to the clip, in the parent's coordinates.
 
         Returns:
-            BBox | None: the box, None if no child draws anything.
+            BBox | None: the box, None if nothing is drawn.
         """
         boxes = [b for b in (child.bbox() for child in self.children) if b is not None]
         if not boxes:
             return None
-        box = boxes[0]
+        box: BBox | None = boxes[0]
         for other in boxes[1:]:
             box = box.union(other)
-        return box if self.transform is None else box.transformed(self.transform)
+        if self.clip is not None:
+            box = box.intersection(self.clip)
+        if box is None or self.transform is None:
+            return box
+        return box.transformed(self.transform)
 
 
 @dataclass(slots=True)

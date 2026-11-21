@@ -1,7 +1,7 @@
 """scene -> svg string.
 
 the scene is y-up in pt; one flip at the root maps it to svg's y-down. text groups flip back
-locally. `<defs>` (gradients, typst glyphs) are collected once per document and keyed by a
+locally. `<defs>` (gradients, clip paths, typst glyphs) are collected once per document and keyed by a
 content hash or typst's own glyph hash, so ids are stable across runs and duplicates collapse.
 
 without a theme every token becomes a css custom property (`fill:var(--fg)`), which the preview
@@ -12,7 +12,7 @@ import hashlib
 from dataclasses import replace
 from html import escape
 
-from fatplotlib.scene import Circle, Group, Node, Path, Rect, Shape, Text
+from fatplotlib.scene import BBox, Circle, Group, Node, Path, Rect, Shape, Text
 from fatplotlib.style import Paint, RadialGradient, Stroke, Token
 from fatplotlib.theme import Theme
 
@@ -110,6 +110,14 @@ def _gradient(gradient: RadialGradient, defs: dict[str, str]) -> str:
     return gid
 
 
+def _clip(box: BBox, defs: dict[str, str]) -> str:
+    """Adds a rectangular clip path to the defs once and returns its id."""
+    rect = f'x="{_num(box.x0)}" y="{_num(box.y0)}" width="{_num(box.width)}" height="{_num(box.height)}"'
+    cid = "clip-" + hashlib.sha1(rect.encode()).hexdigest()[:10]
+    defs.setdefault(cid, f'<clipPath id="{cid}"><rect {rect}/></clipPath>')
+    return cid
+
+
 def _stroke(stroke: Stroke | None, defs: dict[str, str]) -> tuple[list[tuple[str, str]], list[str]]:
     """Attributes and css declarations for an outline."""
     if stroke is None:
@@ -163,6 +171,8 @@ def _node(node: Node, defs: dict[str, str]) -> str:
             if node.transform is not None:
                 t = node.transform
                 pairs.insert(0, ("transform", f"matrix({' '.join(_num(v) for v in (t.a, t.b, t.c, t.d, t.e, t.f))})"))
+            if node.clip is not None:
+                pairs.append(("clip-path", f"url(#{_clip(node.clip, defs)})"))
             return f"<g{_attrs(pairs, style)}>{''.join(_node(child, defs) for child in node.children)}</g>"
         case Path():
             return f"<path{_shape_attrs(node, [('d', _path_data(node))], defs)}/>"

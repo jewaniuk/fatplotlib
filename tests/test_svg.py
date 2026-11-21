@@ -6,7 +6,7 @@ import resvg_py
 
 from fatplotlib.paths import PathBuilder
 from fatplotlib.render.svg import render
-from fatplotlib.scene import Circle, Group, Rect, Text
+from fatplotlib.scene import BBox, Circle, Group, Rect, Text
 from fatplotlib.style import RadialGradient, Stop, Stroke, with_alpha
 from fatplotlib.theme import LIGHT
 from fatplotlib.transform import Affine
@@ -45,3 +45,13 @@ def test_defs_are_deduplicated_and_stable():
     assert len(ids) == len(set(ids))
     assert len(root.findall("svg:defs/svg:radialGradient", ns)) == 1
     assert render(scene(), 70, 60) == svg
+
+
+def test_clip_is_one_shared_def():
+    clip = BBox(0, 0, 10, 10)
+    box = Rect(0, 0, 20, 20, fill="#000000")
+    svg = render(Group([Group([box], clip=clip), Group([box], clip=clip)]), 20, 20)
+    root = ET.fromstring(svg)
+    ns = {"svg": "http://www.w3.org/2000/svg"}
+    (clip_path,) = root.findall("svg:defs/svg:clipPath", ns)
+    assert svg.count(f'clip-path="url(#{clip_path.get("id")})"') == 2

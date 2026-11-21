@@ -96,10 +96,22 @@ class Theme:
 LIGHT = Theme(
     "light",
     MappingProxyType(
-        {"fg": "#000000", "bg": "#ffffff", "muted": "#6b6b6b", "grid": "#d9d9d9", "thin": 0.4, "normal": 0.8, "bold": 1.2}
+        {
+            "fg": "#000000",
+            "bg": "#ffffff",
+            "muted": "#6b6b6b",
+            "grid": "#d9d9d9",
+            "accent_orange": "#e89145",
+            "accent_lavender": "#c5aff0",
+            "accent_teal": "#6ce4bd",
+            "thin": 0.4,
+            "fine": 0.6,
+            "normal": 0.8,
+            "bold": 1.2,
+        }
     ),
 )
 """black on white."""
 
 DARK = LIGHT.with_("dark", fg="#ffffff", bg="#1e1e1e", muted="#a6a6a6", grid="#3d3d3d")
-"""white on near-black, as on the dark slides. weights match light so geometry does not move."""
+"""white on near-black, as on the dark slides. accents and weights match light (geometry must not move)."""

@@ -25,3 +25,9 @@ def test_group_bbox_applies_transform():
     box = group.bbox()
     assert box is not None
     assert math.isclose(box.x0, 0, abs_tol=1e-12) and math.isclose(box.y1, 2)
+
+
+def test_group_bbox_is_cut_to_clip():
+    line = PathBuilder().move_to(-5, 1).line_to(15, 1).path()
+    assert Group([line], clip=BBox(0, 0, 10, 10)).bbox() == BBox(0, 1, 10, 1)
+    assert Group([line], clip=BBox(20, 20, 30, 30)).bbox() is None

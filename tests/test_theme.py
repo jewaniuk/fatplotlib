@@ -15,13 +15,13 @@ def scene() -> Group:
 
 
 def test_resolve_and_with():
-    teal = DARK.with_(accent_teal="#5fd3c6")
-    assert teal.colour(Token("accent_teal")) == "#5fd3c6"
-    assert teal.colour(Token("fg")) == DARK.colour(Token("fg"))
-    assert teal.name == "dark" and DARK.with_("slides").name == "slides"
+    pink = DARK.with_(accent_pink="#f2a3c4")
+    assert pink.colour(Token("accent_pink")) == "#f2a3c4"
+    assert pink.colour(Token("fg")) == DARK.colour(Token("fg"))
+    assert pink.name == "dark" and DARK.with_("slides").name == "slides"
     assert LIGHT.number(0.5) == 0.5
-    with pytest.raises(KeyError, match="accent_teal"):
-        DARK.colour(Token("accent_teal"))
+    with pytest.raises(KeyError, match="accent_pink"):
+        DARK.colour(Token("accent_pink"))
     with pytest.raises(TypeError, match="thin"):
         DARK.colour(Token("thin"))
 
