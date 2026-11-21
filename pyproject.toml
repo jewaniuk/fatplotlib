@@ -1,5 +1,5 @@
 [project]
-name = "fig"
+name = "fatplotlib"
 version = "0.1.0"
 description = "modern tooling for preparing academic figures, not just plots"
 readme = "README.md"
