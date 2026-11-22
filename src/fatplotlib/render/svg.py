@@ -12,7 +12,9 @@ import hashlib
 from dataclasses import replace
 from html import escape
 
-from fatplotlib.scene import BBox, Circle, Ellipse, Group, Node, Path, Rect, Shape, Text
+import numpy as np
+
+from fatplotlib.scene import BBox, Circle, Ellipse, Group, Node, Path, Polylines, Rect, Shape, Text
 from fatplotlib.style import Paint, RadialGradient, Stroke, Token
 from fatplotlib.theme import Theme
 
@@ -163,6 +165,18 @@ def _path_data(node: Path) -> str:
     return " ".join(command[0] + " ".join(_num(v) for v in command[1:]) for command in node.commands)
 
 
+def _polylines_data(node: Polylines) -> str:
+    """The svg `d` string of polylines: an M per curve or break, then implicit line-tos."""
+    finite = np.isfinite(node.xs) & np.isfinite(node.ys)
+    after = np.zeros_like(finite)
+    after[:, 1:] = finite[:, :-1]
+    # one "x y" per drawn point in row order, M on the first of each run
+    pairs = list(map("{:.6g} {:.6g}".format, node.xs[finite].tolist(), node.ys[finite].tolist()))
+    for i in np.flatnonzero((finite & ~after)[finite]).tolist():
+        pairs[i] = "M" + pairs[i]
+    return " ".join(pairs)
+
+
 def _node(node: Node, defs: dict[str, str]) -> str:
     """Svg text for one node and its children, adding what it references to `defs`."""
     match node:
@@ -176,6 +190,8 @@ def _node(node: Node, defs: dict[str, str]) -> str:
             return f"<g{_attrs(pairs, style)}>{''.join(_node(child, defs) for child in node.children)}</g>"
         case Path():
             return f"<path{_shape_attrs(node, [('d', _path_data(node))], defs)}/>"
+        case Polylines():
+            return f"<path{_shape_attrs(node, [('d', _polylines_data(node))], defs)}/>"
         case Rect():
             geometry = [(k, _num(v)) for k, v in (("x", node.x), ("y", node.y), ("width", node.width), ("height", node.height))]
             if node.radius:

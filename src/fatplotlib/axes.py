@@ -1,10 +1,10 @@
 """axes: scales, ticks, spines and data drawing on a rectangle that layout places.
 
-an `Axes` is built before it has a rectangle: `line`, `arrow`, `text`, `draw` and `inset` record
+an `Axes` is built before it has a rectangle: `line`, `lines`, `arrow`, `text`, `draw` and `inset` record
 what to draw, and `group()` builds the scene nodes once `place` has given the rectangle (`inner`)
 and the font size that em lengths scale. around the rectangle it draws spines on all four sides,
 inward major and minor ticks on every side, typst tick labels and axis labels on the bottom and
-left (and on top for a twin axis). data drawn with `line`, `arrow` and `draw` is clipped to the
+left (and on top for a twin axis). data drawn with `line`, `lines`, `arrow` and `draw` is clipped to the
 rectangle, `text` and insets are not. `outer()` is the box the decorations reach, which layout
 measures.
 
@@ -23,7 +23,7 @@ import numpy as np
 from numpy.typing import ArrayLike
 
 from fatplotlib.panel import Panel
-from fatplotlib.scene import BBox, Command, Group, Node, Path, Rect, Text
+from fatplotlib.scene import BBox, Command, Group, Node, Path, Polylines, Rect, Text
 from fatplotlib.style import Paint, Stroke, Token
 from fatplotlib.transform import Affine
 from fatplotlib.units import length
@@ -389,6 +389,25 @@ class Axes:
             commands.append(("M", xi, yi) if lifted else ("L", xi, yi))
             lifted = False
         return Path(tuple(commands), stroke=stroke, **node)  # pyright: ignore[reportArgumentType]
+
+    def lines(self, x: ArrayLike, ys: ArrayLike, stroke: Stroke, coords: Coords = "data", **node: object) -> None:
+        """Draws many curves sharing x as one `Polylines`, far cheaper than a `line` per curve.
+        each curve breaks wherever a point cannot be mapped.
+
+        Args:
+            x (ArrayLike): x positions, shape (points,), shared by every curve.
+            ys (ArrayLike): y positions, shape (curves, points).
+            stroke (Stroke): the line style, shared by every curve.
+            coords (Coords): what the positions mean.
+            **node (object): other `Polylines` fields such as id or alpha.
+        """
+        self._data.append(lambda: self._lines(x, ys, stroke, coords, node))
+
+    def _lines(self, x: ArrayLike, ys: ArrayLike, stroke: Stroke, coords: Coords, node: dict[str, object]) -> Polylines:
+        """The polylines for `lines`, in pt."""
+        ys = np.atleast_2d(np.asarray(ys, dtype=float))
+        px, py = self.to_pt(np.broadcast_to(np.asarray(x, dtype=float), ys.shape), ys, coords)
+        return Polylines(px, py, stroke=stroke, **node)  # pyright: ignore[reportArgumentType]
 
     def arrow(
         self,

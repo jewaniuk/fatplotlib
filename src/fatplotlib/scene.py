@@ -9,6 +9,8 @@ import math
 from dataclasses import dataclass, field
 from typing import Literal
 
+import numpy as np
+
 from fatplotlib import text
 from fatplotlib.style import Paint, Stroke, Token
 from fatplotlib.theme import LIGHT
@@ -19,6 +21,10 @@ type Command = (
     | tuple[Literal["C"], float, float, float, float, float, float]
     | tuple[Literal["Z"]]
 )
+
+# gauss-legendre nodes and weights on [0, 1] for cubic arc length
+_GAUSS_T, _GAUSS_W = np.polynomial.legendre.leggauss(24)
+_GAUSS_T, _GAUSS_W = (_GAUSS_T + 1) / 2, _GAUSS_W / 2
 
 
 @dataclass(frozen=True, slots=True)
@@ -126,6 +132,43 @@ def _cubic_at(t: float, p0: float, p1: float, p2: float, p3: float) -> float:
     return s**3 * p0 + 3 * s * s * t * p1 + 3 * s * t * t * p2 + t**3 * p3
 
 
+def _cubic_velocity(segments: np.ndarray, t: np.ndarray) -> np.ndarray:
+    """Derivatives of cubics, control points shape (..., 4, 2), at parameters t shape (k,): (..., k, 2)."""
+    p0, p1, p2, p3 = (segments[..., i, None, :] for i in range(4))
+    t = t[:, None]
+    s = 1 - t
+    return 3 * (s * s * (p1 - p0) + 2 * s * t * (p2 - p1) + t * t * (p3 - p2))
+
+
+def _cubic_lengths(segments: np.ndarray, upto: float = 1.0) -> np.ndarray:
+    """Arc lengths of cubics, control points shape (..., 4, 2), from t = 0 to `upto`."""
+    speed = np.linalg.norm(_cubic_velocity(segments, upto * _GAUSS_T), axis=-1)
+    return upto * speed @ _GAUSS_W
+
+
+def _cubic_param(segment: np.ndarray, distance: float, length: float) -> float:
+    """The parameter t at which one cubic, control points shape (4, 2), has drawn `distance` of
+    its `length`: newton steps, falling back to bisection when a step leaves the bracket."""
+    lo, hi = 0.0, 1.0
+    t = distance / length
+    for _ in range(50):
+        error = float(_cubic_lengths(segment, t)) - distance
+        if abs(error) <= 1e-12 * length:
+            break
+        lo, hi = (lo, t) if error > 0 else (t, hi)
+        speed = float(np.linalg.norm(_cubic_velocity(segment, np.array([t]))))
+        step = t - error / speed if speed > 0 else lo
+        t = step if lo < step < hi else (lo + hi) / 2
+    return t
+
+
+def _line_cubic(a: tuple[float, float], b: tuple[float, float]) -> tuple[tuple[float, float], ...]:
+    """A straight segment as a cubic with control points at thirds, so its speed is constant."""
+    (x0, y0), (x1, y1) = a, b
+    dx, dy = (x1 - x0) / 3, (y1 - y0) / 3
+    return (a, (x0 + dx, y0 + dy), (x1 - dx, y1 - dy), b)
+
+
 @dataclass(slots=True, kw_only=True)
 class Node:
     """Fields every node shares.
@@ -207,6 +250,21 @@ class Group(Node):
         return box.transformed(self.transform)
 
 
+@dataclass(frozen=True, slots=True)
+class PathPoint:
+    """A position along a path.
+
+    Attributes:
+        x (float): x.
+        y (float): y.
+        angle (float): the tangent direction in degrees, counterclockwise from +x.
+    """
+
+    x: float
+    y: float
+    angle: float
+
+
 @dataclass(slots=True)
 class Path(Shape):
     """An svg path; build one with `paths.PathBuilder`.
@@ -242,6 +300,95 @@ class Path(Shape):
                 case ("Z",):
                     current = start
         return _points_bbox(points).padded(self._pad()) if points else None
+
+    def length(self) -> float:
+        """The drawn length: lines exact, cubics by 24-node gauss-legendre quadrature, Z as a
+        line back to the subpath start. moves add nothing.
+
+        Returns:
+            float: the length.
+        """
+        return float(_cubic_lengths(self._segments()).sum())
+
+    def point_at(self, fraction: float) -> PathPoint:
+        """The point a fraction of the way along the drawn length, with its tangent. for an
+        absolute distance d use `point_at(d / path.length())`.
+
+        Args:
+            fraction (float): 0 at the start to 1 at the end.
+
+        Returns:
+            PathPoint: the position and tangent angle.
+
+        Raises:
+            ValueError: the fraction is outside 0 to 1, or the path draws nothing.
+        """
+        if not 0 <= fraction <= 1:
+            raise ValueError(f"fraction {fraction} is outside 0 to 1")
+        segments = self._segments()
+        lengths = _cubic_lengths(segments)
+        # zero-length pieces have no tangent, and drawing them moves nothing
+        segments, lengths = segments[lengths > 0], lengths[lengths > 0]
+        if len(lengths) == 0:
+            raise ValueError("the path draws nothing")
+        ends = np.cumsum(lengths)
+        target = fraction * ends[-1]
+        i = min(int(np.searchsorted(ends, target)), len(lengths) - 1)
+        segment, length = segments[i], float(lengths[i])
+        t = _cubic_param(segment, min(max(target - (ends[i] - length), 0.0), length), length)
+        (x0, y0), (x1, y1), (x2, y2), (x3, y3) = segment.tolist()
+        dx, dy = _cubic_velocity(segment, np.array([t]))[0].tolist()
+        if math.hypot(dx, dy) <= 1e-12 * length:
+            # a control point on an endpoint: take the direction from just inside
+            dx, dy = _cubic_velocity(segment, np.array([min(max(t, 1e-6), 1 - 1e-6)]))[0].tolist()
+        return PathPoint(
+            _cubic_at(t, x0, x1, x2, x3), _cubic_at(t, y0, y1, y2, y3), math.degrees(math.atan2(dy, dx))
+        )
+
+    def _segments(self) -> np.ndarray:
+        """The drawn pieces as cubic control points, shape (n, 4, 2); lines and Z become cubics."""
+        segments: list[tuple[tuple[float, float], ...]] = []
+        current = start = (0.0, 0.0)
+        for command in self.commands:
+            match command:
+                case ("M", x, y):
+                    current = start = (x, y)
+                case ("L", x, y):
+                    segments.append(_line_cubic(current, (x, y)))
+                    current = (x, y)
+                case ("C", x1, y1, x2, y2, x, y):
+                    segments.append((current, (x1, y1), (x2, y2), (x, y)))
+                    current = (x, y)
+                case ("Z",):
+                    segments.append(_line_cubic(current, start))
+                    current = start
+        return np.array(segments, dtype=float).reshape(-1, 4, 2)
+
+
+@dataclass(slots=True, eq=False)
+class Polylines(Shape):
+    """Many polylines in one style, emitted as one svg path with a subpath per curve. a curve
+    breaks wherever a point is not finite, like `Axes.line`.
+
+    Attributes:
+        xs (np.ndarray): x positions, shape (curves, points).
+        ys (np.ndarray): y positions, the same shape.
+    """
+
+    xs: np.ndarray
+    ys: np.ndarray
+
+    def bbox(self) -> BBox | None:
+        """The box around the finite points, stroke included.
+
+        Returns:
+            BBox | None: the box, None if no point is finite.
+        """
+        finite = np.isfinite(self.xs) & np.isfinite(self.ys)
+        if not finite.any():
+            return None
+        xs, ys = self.xs[finite], self.ys[finite]
+        return BBox(float(xs.min()), float(ys.min()), float(xs.max()), float(ys.max())).padded(self._pad())
 
 
 @dataclass(slots=True)

@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 from fatplotlib.axes import Axes, Scale
-from fatplotlib.scene import BBox, Group, Path, Text
+from fatplotlib.scene import BBox, Group, Path, Polylines, Text
 from fatplotlib.style import Stroke
 
 
@@ -76,6 +76,17 @@ def test_line_breaks_where_log_cannot_map():
     data = ax.group().children[0]
     assert isinstance(data, Group) and isinstance(path := data.children[0], Path)
     assert [c[0] for c in path.commands] == ["M", "M", "L"]
+
+
+def test_lines_share_x_and_map_every_curve():
+    ax = axes()
+    ax.lines([0, 5, 10], [[1, 10, 100], [1000, 0, 1]], Stroke("#000000"), alpha=0.2)
+    data = ax.group().children[0]
+    assert isinstance(data, Group) and isinstance(node := data.children[0], Polylines)
+    assert node.alpha == 0.2 and node.xs.shape == node.ys.shape == (2, 3)
+    assert np.allclose(node.xs, [[20, 70, 120]] * 2)
+    assert np.allclose(node.ys[0], [10, 10 + 50 / 3, 10 + 100 / 3]) and node.ys[1, 0] == 60
+    assert not np.isfinite(node.ys[1, 1])
 
 
 def test_drawing_waits_for_placement():

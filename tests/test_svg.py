@@ -1,12 +1,14 @@
 """svg rendering."""
 
+import time
 import xml.etree.ElementTree as ET
 
+import numpy as np
 import resvg_py
 
 from fatplotlib.paths import PathBuilder
 from fatplotlib.render.svg import render
-from fatplotlib.scene import BBox, Circle, Group, Rect, Text
+from fatplotlib.scene import BBox, Circle, Group, Polylines, Rect, Text
 from fatplotlib.style import RadialGradient, Stop, Stroke, with_alpha
 from fatplotlib.theme import LIGHT
 from fatplotlib.transform import Affine
@@ -55,3 +57,26 @@ def test_clip_is_one_shared_def():
     ns = {"svg": "http://www.w3.org/2000/svg"}
     (clip_path,) = root.findall("svg:defs/svg:clipPath", ns)
     assert svg.count(f'clip-path="url(#{clip_path.get("id")})"') == 2
+
+
+def test_polylines_emit_one_path_with_a_subpath_per_curve_or_break():
+    xs = np.tile(np.arange(4, dtype=float), (3, 1))
+    ys = np.array([[0, 1, 2, 3], [1, np.nan, 2, 3], [0, 0, 0, 0]], dtype=float)
+    svg = render(Polylines(xs, ys, stroke=Stroke("#000000", 0.5)), 10, 10)
+    (path,) = ET.fromstring(svg).iter("{http://www.w3.org/2000/svg}path")
+    d = path.get("d")
+    assert d is not None and d.count("M") == 4
+    assert d.startswith("M0 0 1 1 2 2 3 3 M0 1 M2 2 3 3")
+
+
+def test_polylines_build_and_svg_time():
+    rng = np.random.default_rng(0)
+    start = time.perf_counter()
+    xs = np.tile(np.linspace(0, 100, 200), (1000, 1))
+    ys = rng.random((1000, 200)).cumsum(axis=1)
+    node = Polylines(xs, ys, stroke=Stroke("#000000", 0.2), alpha=0.1)
+    built = time.perf_counter()
+    svg = render(node, 100, 100)
+    done = time.perf_counter()
+    print(f"\n1000 x 200 polylines: build {1e3 * (built - start):.1f} ms, svg {1e3 * (done - built):.1f} ms, {len(svg) / 1e6:.1f} MB")
+    assert svg.count("<path") == 1
