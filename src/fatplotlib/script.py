@@ -31,7 +31,7 @@ def load(path: Path) -> tuple[Figure, dict[str, Target]]:
             `targets.py` defines them ({"default": Target()} without one).
 
     Raises:
-        NameError: the script does not set `fig`.
+        TypeError: the script does not set `fig` to a `Figure`.
     """
     directory = path.resolve().parent
     for name, module in list(sys.modules.items()):
@@ -42,7 +42,7 @@ def load(path: Path) -> tuple[Figure, dict[str, Target]]:
         sys.path.insert(0, str(directory))
     names = runpy.run_path(str(path), run_name="__main__")
     if not isinstance(names.get("fig"), Figure):
-        raise NameError(f"{path.name} must set fig to a Figure")
+        raise TypeError(f"{path.name} must set fig to a Figure")
     targets = {"default": Target()}
     if (directory / "targets.py").exists():
         module = importlib.import_module("targets")

@@ -5,7 +5,7 @@ import pytest
 from fatplotlib.axes import Axes
 from fatplotlib.layout import Column, Figure, Row, Target
 from fatplotlib.panel import Frame, Panel
-from fatplotlib.scene import BBox, Rect, Text
+from fatplotlib.scene import BBox, Group, Rect, Text
 
 PAPER = Target(columnwidth="3.4in", base="9texpt")
 
@@ -15,9 +15,9 @@ def plot(**kwargs: object) -> Axes:
     return Axes(xlim=(0, 4000), ylim=(1, 1000), yscale="log", ylabel="Rate", **kwargs)  # pyright: ignore[reportArgumentType]
 
 
-def labels(root: object) -> list[Text]:
+def labels(root: Group) -> list[Text]:
     """The panel labels in a built scene."""
-    return [n for n in getattr(root, "children") if isinstance(n, Text) and n.class_ == "fpl-label"]
+    return [n for n in root.children if isinstance(n, Text) and n.class_ == "fpl-label"]
 
 
 def test_column_shares_inner_edges_and_splits_inner_heights():

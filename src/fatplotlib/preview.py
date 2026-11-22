@@ -163,7 +163,7 @@ def _build(path: Path, state: _State, next_target: bool = False) -> None:
                 state.target = kept or script.pick(state.targets)
             assert state.figure is not None and state.target is not None  # loaded above or before
             svg = render(*state.figure.scene(state.targets[state.target].with_(labels=True)))
-        except Exception:
+        except Exception:  # noqa: BLE001 - any error in the user's script is shown, not fatal
             error = traceback.format_exc()
             print(error)
             state.publish(None, error, "error")
@@ -207,7 +207,8 @@ def _handler(page: bytes, state: _State, path: Path) -> type[BaseHTTPRequestHand
             try:
                 while True:
                     with state.changed:
-                        fresh = state.changed.wait_for(lambda: state.version != seen, timeout=15)
+                        # wait_for calls the lambda now, in this pass, so it reads the current seen
+                        fresh = state.changed.wait_for(lambda: state.version != seen, timeout=15)  # noqa: B023
                         seen, message = state.version, state.message
                     # on a timeout send an sse comment, which keeps the connection alive
                     self.wfile.write(f"data: {message}\n\n".encode() if fresh else b": ping\n\n")
