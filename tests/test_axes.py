@@ -221,24 +221,28 @@ def test_log_colorbar_ticks_decades_with_minors():
     assert np.allclose(ys, [10, 35, 60, 85, 110])
 
 
-def test_stepped_colorbars_stack_a_rect_per_level_or_bin():
+def test_stepped_colorbars_fill_one_gradient_with_hard_stops():
     cmap = Colormap("#ffffff", "#fc69a0", levels=4)
     bar = Colorbar(cmap, Norm("linear", (0, 1)))
     bar.place(BBox(100, 10, 109, 110), 9)
-    bands = strip(bar)
-    assert isinstance(bands, Group)
-    assert [(r.y, r.height, r.fill) for r in bands.children] == [  # pyright: ignore[reportAttributeAccessIssue]
-        (10 + 25 * i, 25, cmap.entries()[i]) for i in range(4)
+    rect = strip(bar)
+    assert isinstance(rect, Rect) and isinstance(gradient := rect.fill, LinearGradient)
+    # two stops per band, the second band starting where the first ends
+    assert [(s.offset, s.colour) for s in gradient.stops] == [
+        (f, cmap.entries()[i]) for i in range(4) for f in (i / 4, (i + 1) / 4)
     ]
     cmap = Colormap("#ffffff", "#fc69a0", levels=3)
     bar = Colorbar(cmap, Norm("linear", (0, 1), boundaries=[0, 0.5, 0.75, 1]))
     bar.place(BBox(100, 10, 109, 110), 9)
-    bands = strip(bar)
-    assert isinstance(bands, Group)
-    assert [(r.y, r.height, r.fill) for r in bands.children] == [  # pyright: ignore[reportAttributeAccessIssue]
-        (10, 50, cmap.entries()[0]),
-        (60, 25, cmap.entries()[1]),
-        (85, 25, cmap.entries()[2]),
+    rect = strip(bar)
+    assert isinstance(rect, Rect) and isinstance(gradient := rect.fill, LinearGradient)
+    assert [(s.offset, s.colour) for s in gradient.stops] == [
+        (0, cmap.entries()[0]),
+        (0.5, cmap.entries()[0]),
+        (0.5, cmap.entries()[1]),
+        (0.75, cmap.entries()[1]),
+        (0.75, cmap.entries()[2]),
+        (1, cmap.entries()[2]),
     ]
 
 

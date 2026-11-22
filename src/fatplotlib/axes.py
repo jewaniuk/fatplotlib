@@ -777,9 +777,11 @@ class Colorbar(Axes):
     """A colormap's key: a strip of its colours along a long axis that maps values through the
     norm, with ticks, tick labels and an axis label on one side and nothing on the others.
 
-    It never gets a panel label. the strip is data, a gradient for a continuous map and a rect
-    per colour for a stepped one (`levels` on the map, or `boundaries` on the norm). notes past
-    an end, such as "$<= 10^(-9)$" for values under the map, go through `text` in axes coords.
+    It never gets a panel label. the strip is data: one rect filled with a gradient, smooth for a
+    continuous map and with hard stops (two at each band edge) for a stepped one (`levels` on the
+    map, or `boundaries` on the norm). one shape means no antialiasing seams between bands, which
+    separate rects would show (#16). notes past an end, such as "$<= 10^(-9)$" for values under
+    the map, go through `text` in axes coords.
 
     Attributes:
         cmap (Colormap): the colormap.
@@ -843,33 +845,29 @@ class Colorbar(Axes):
             return Themed({name: self._strip_of(m) for name, m in self.cmap.themes.items()})
         return self._strip_of(self.cmap)
 
-    def _strip_of(self, cmap: Colormap) -> Node:
-        """One map's strip, in pt, lut entries placed along the long axis by the norm."""
+    def _strip_of(self, cmap: Colormap) -> Rect:
+        """One map's strip, in pt: a gradient rect, lut entries placed along the long axis by the norm."""
         r = self._rect()
-        vertical = self.side in ("left", "right")
         entries, edges = cmap.entries(), self.norm.boundaries
         if cmap.levels is None and edges is None:
             # the lut sampled evenly, its fraction along the map also its fraction along the axis
             fractions = np.linspace(0, 1, _GRADIENT_STOPS)
-            stops = tuple(Stop(f, entries[i]) for f, i in zip(fractions.tolist(), cmap.index(fractions).tolist()))
-            end = (0.0, 1.0) if vertical else (1.0, 0.0)
-            return Rect(r.x0, r.y0, r.width, r.height, fill=LinearGradient(stops, 0.0, 0.0, *end))
-        if edges is None:
-            # one band per level, evenly along the axis
-            bounds = np.linspace(0, 1, cmap.size + 1)
-            colours = (bounds[:-1] + bounds[1:]) / 2
+            stops = [Stop(f, entries[i]) for f, i in zip(fractions.tolist(), cmap.index(fractions).tolist())]
         else:
-            # one band per bin, spaced by the norm's scale, coloured as the norm colours the bin
-            bounds = self.norm.scale.fraction(edges)
-            colours = self.norm.fraction((edges[:-1] + edges[1:]) / 2)
-        bands: list[Node] = []
-        for f0, f1, i in zip(bounds[:-1].tolist(), bounds[1:].tolist(), cmap.index(colours).tolist()):
-            lo, hi = min(f0, f1), max(f0, f1)
-            if vertical:
-                bands.append(Rect(r.x0, r.y0 + lo * r.height, r.width, (hi - lo) * r.height, fill=entries[i]))
+            if edges is None:
+                # one band per level, evenly along the axis
+                bounds = np.linspace(0, 1, cmap.size + 1)
+                colours = (bounds[:-1] + bounds[1:]) / 2
             else:
-                bands.append(Rect(r.x0 + lo * r.width, r.y0, (hi - lo) * r.width, r.height, fill=entries[i]))
-        return Group(bands)
+                # one band per bin, spaced by the norm's scale, coloured as the norm colours the bin
+                bounds = self.norm.scale.fraction(edges)
+                colours = self.norm.fraction((edges[:-1] + edges[1:]) / 2)
+            bands = zip(bounds[:-1].tolist(), bounds[1:].tolist(), cmap.index(colours).tolist())
+            # a stop at each end of each band, ascending along the axis (a reversed norm runs backwards)
+            ordered = sorted((min(f0, f1), max(f0, f1), entries[i]) for f0, f1, i in bands)
+            stops = [Stop(f, colour) for lo, hi, colour in ordered for f in (lo, hi)]
+        end = (0.0, 1.0) if self.side in ("left", "right") else (1.0, 0.0)
+        return Rect(r.x0, r.y0, r.width, r.height, fill=LinearGradient(tuple(stops), 0.0, 0.0, *end))
 
 
 def _span(values: np.ndarray) -> Norm:
