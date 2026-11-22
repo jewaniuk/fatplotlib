@@ -1,5 +1,7 @@
 """layout: solving rows and columns, panels, targets and panel labels."""
 
+import warnings
+
 import pytest
 
 from fatplotlib.axes import Axes
@@ -69,8 +71,10 @@ def test_panel_fits_and_centres_with_fixed_sizes():
         return [Rect(*f.pt(0, 0), f.length(100), f.length("1em"))]
 
     panel = Panel(2, draw)
+    panel.place(BBox(0, 0, 100, 100), 9)
+    assert panel.filled == 0.5
     with pytest.warns(UserWarning, match="fills 50%"):
-        panel.place(BBox(0, 0, 100, 100), 9)
+        panel.warn_gap()
     assert panel.outer() == BBox(0, 25, 100, 75)
     rect = panel.group().children[0]
     assert isinstance(rect, Rect) and (rect.y, rect.width, rect.height) == (25, 100, 9)
@@ -106,3 +110,20 @@ def test_schematic_label_anchors_on_drawn_content():
     drawn = panel.group().bbox()
     assert drawn is not None and drawn != panel.outer()
     assert (a.x, a.y) == (drawn.x0, drawn.y1)
+
+
+def test_gap_warns_once_from_the_solved_slot():
+    def draw(f: Frame) -> list[Rect]:
+        return [Rect(*f.pt(0, 0), f.length(100), f.length(100))]
+
+    # the seed placement into the 2:1 page leaves half of it empty, the solved square slots do not
+    fig = Figure("4in", height="2in", pad=0)
+    fig.layout(Row(Panel(1, draw), Panel(1, draw), gap=0))
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        fig.scene(PAPER)
+    lone = Figure("4in", height="2in", pad=0)
+    lone.layout(Panel(1, draw))
+    with pytest.warns(UserWarning, match="fills 50%") as caught:
+        lone.scene(PAPER)
+    assert len(caught) == 1

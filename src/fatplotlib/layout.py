@@ -205,7 +205,8 @@ def _leaves(item: Item) -> Iterator[Leaf]:
 
 
 def _solve(root: Item, area: BBox, em: float) -> None:
-    """Places every leaf, re-solving until the measured margins settle."""
+    """Places every leaf, re-solving until the measured margins settle, then warns about panels
+    that leave much of their final slot empty."""
     leaves = list(_leaves(root))
     for leaf in leaves:
         leaf.place(area, em)
@@ -218,7 +219,10 @@ def _solve(root: Item, area: BBox, em: float) -> None:
         settled = all(abs(a - b) < _SETTLED for k in margins for a, b in zip(margins[k], measured[k]))
         margins = measured
         if settled:
-            return
+            break
+    for leaf in leaves:
+        if isinstance(leaf, Panel):
+            leaf.warn_gap()
 
 
 def _margins(leaf: Leaf) -> Margins:

@@ -66,6 +66,7 @@ class Panel:
             it, a string replaces the letter.
         box (BBox | None): the fitted box in pt, None until placed.
         em (float | None): the font size in pt that em lengths scale, None until placed.
+        filled (float | None): the share of its last slot the fitted box fills, None until placed.
     """
 
     def __init__(self, aspect: float, draw: Callable[[Frame], Iterable[Node]], *, label: str | bool | None = None) -> None:
@@ -81,9 +82,11 @@ class Panel:
         self.label = label
         self.box: BBox | None = None
         self.em: float | None = None
+        self.filled: float | None = None
 
     def place(self, slot: BBox, em: float) -> None:
-        """Fits the panel in a slot, centred, warning when it leaves much of the slot empty.
+        """Fits the panel in a slot, centred. layout may place a panel several times while it
+        solves, so this only records `filled`; `warn_gap` reports it once the slot is final.
 
         Args:
             slot (BBox): the space in pt.
@@ -91,13 +94,16 @@ class Panel:
         """
         width = min(slot.width, slot.height * self.aspect)
         height = width / self.aspect
-        filled = width * height / (slot.width * slot.height) if slot.width * slot.height > 0 else 1.0
-        if filled < 1 - _MAX_GAP:
-            warnings.warn(f"a panel with aspect {self.aspect:.3g} fills {filled:.0%} of its space", stacklevel=2)
+        self.filled = width * height / (slot.width * slot.height) if slot.width * slot.height > 0 else 1.0
         x0 = slot.x0 + (slot.width - width) / 2
         y0 = slot.y0 + (slot.height - height) / 2
         self.box = BBox(x0, y0, x0 + width, y0 + height)
         self.em = em
+
+    def warn_gap(self) -> None:
+        """Warns when the last placement left much of the slot empty."""
+        if self.filled is not None and self.filled < 1 - _MAX_GAP:
+            warnings.warn(f"a panel with aspect {self.aspect:.3g} fills {self.filled:.0%} of its space", stacklevel=2)
 
     def frame(self) -> Frame:
         """The placed panel for drawing.

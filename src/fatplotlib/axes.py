@@ -517,6 +517,7 @@ class Axes:
             """The placed panel."""
             (x0, x1), (y0, y1) = self.to_pt([box[0], box[2]], [box[1], box[3]], coords)
             panel.place(BBox(min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1)), self._em())
+            panel.warn_gap()
             return panel.group()
 
         self._insets.append(build)
