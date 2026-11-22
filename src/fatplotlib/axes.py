@@ -3,10 +3,13 @@
 an `Axes` is built before it has a rectangle: `line`, `lines`, `markers`, `heatmap`, `fill_between`,
 `grid`, `arrow`, `text`, `draw` and `inset` record what to draw, and `group()` builds the scene nodes
 once `place` has given the rectangle (`inner`) and the font size that em lengths scale. around the
-rectangle it draws spines on all four sides, inward major and minor ticks on every side, typst tick
-labels and axis labels on the bottom and left (and on top for a twin axis). data (everything but
-`text`, unclipped markers and insets) is clipped to the rectangle, with the grid under it. `outer()` is the box the
+rectangle it draws spines on all four sides and, per `Side`, inward major and minor ticks and,
+on labelled sides, typst tick labels and an axis label: a plain axes ticks every side and labels
+the bottom and left (and the top for a twin axis). data (everything but `text`, unclipped markers
+and insets) is clipped to the rectangle, with the grid under it. `outer()` is the box the
 decorations and notes (text, unclipped markers) reach, which layout measures.
+
+a `Colorbar` is an axes whose data is a colormap's strip and whose one labelled side is the norm.
 
 ticks follow `Scale`'s nice-number rule, with `max_gaps` from the axis length and label size, as
 in matplotlib. odd ranges (under a decade on a log axis, big values with tiny spans) take explicit
@@ -25,7 +28,7 @@ from fatplotlib.colormap import DEFAULT, Colormap, Norm
 from fatplotlib.panel import Panel
 from fatplotlib.scale import EPS, Scale
 from fatplotlib.scene import BBox, Command, Group, Markers, MarkerShape, Node, Path, Polylines, Rect, Text, Themed
-from fatplotlib.style import Paint, Stroke, Token
+from fatplotlib.style import LinearGradient, Paint, Stop, Stroke, Token
 from fatplotlib.transform import Affine
 from fatplotlib.units import length
 
@@ -34,6 +37,12 @@ type Coords = Literal["data", "axes"]
 
 type Resolved = tuple[list[float], list[float], list[str]]
 """an axis's major ticks, minor ticks and tick labels, as `Axis.resolved` gives them."""
+
+type SideName = Literal["bottom", "left", "top", "right"]
+"""a side of the axes rectangle."""
+
+# stops sampled from a continuous colormap for a colorbar's gradient
+_GRADIENT_STOPS = 64
 
 @dataclass(slots=True)
 class Axis:
@@ -83,6 +92,20 @@ class Axis:
             case _:
                 labels = list(self.labels)
         return majors, minors, labels
+
+
+@dataclass(frozen=True, slots=True)
+class Side:
+    """What one side of the rectangle draws besides its spine.
+
+    Attributes:
+        axis (Axis): the axis whose ticks the side draws.
+        labelled (bool): whether the side also draws the axis's tick labels and axis label;
+            False for a mirror, which only ticks.
+    """
+
+    axis: Axis
+    labelled: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -147,6 +170,9 @@ class Axes:
         style (AxesStyle): decoration sizes and paints.
         label (str | bool | None): the panel label: None letters it automatically, False skips
             it, a string replaces the letter.
+        width (float | str | None): a fixed rectangle width, pt or a length such as "1em", that
+            layout keeps; free if None.
+        height (float | str | None): a fixed rectangle height, free if None.
         inner (BBox | None): the plot rectangle in pt, None until placed.
         em (float | None): the font size in pt that em lengths scale, None until placed.
     """
@@ -168,6 +194,8 @@ class Axes:
         ylabel: str | None = None,
         style: AxesStyle = AxesStyle(),
         label: str | bool | None = None,
+        width: float | str | None = None,
+        height: float | str | None = None,
     ) -> None:
         """Sets up the axes; see `Axis` for what each tick and label argument means.
 
@@ -186,12 +214,16 @@ class Axes:
             ylabel (str | None): left axis label.
             style (AxesStyle): decoration sizes and paints.
             label (str | bool | None): the panel label.
+            width (float | str | None): a fixed rectangle width.
+            height (float | str | None): a fixed rectangle height.
         """
         self.x = Axis(Scale(xscale, xlim), xticks, xminor, xticklabels, xlabel)
         self.y = Axis(Scale(yscale, ylim), yticks, yminor, yticklabels, ylabel)
         self.top: Axis | None = None
         self.style = style
         self.label = label
+        self.width = width
+        self.height = height
         self.inner: BBox | None = None
         self.em: float | None = None
         # builders run by group(): clipped data, unclipped notes, insets on top
@@ -451,12 +483,12 @@ class Axes:
         def build() -> Path:
             """The grid lines: ticks as long as the rectangle."""
             r = self._rect()
-            bottom, left, _ = self._resolved()
+            resolved = self._resolved()
             commands: list[Command] = []
             if axis in ("x", "both"):
-                commands += self._ticks(self.x.scale, bottom[0], "bottom", r.height)
+                commands += self._ticks(self.x.scale, resolved["bottom"][0], "bottom", r.height)
             if axis in ("y", "both"):
-                commands += self._ticks(self.y.scale, left[0], "left", r.width)
+                commands += self._ticks(self.y.scale, resolved["left"][0], "left", r.width)
             return Path(tuple(commands), stroke=stroke)
 
         self._data.insert(0, build)
@@ -650,68 +682,80 @@ class Axes:
         """A length in pt, em resolved against the placed font size."""
         return length(value, self._em())
 
-    def _resolved(self) -> tuple[Resolved, Resolved, Resolved]:
-        """The bottom, left and top axes' majors, minors and tick labels, as many ticks as fit
-        the rectangle at the tick label size."""
+    def _sides(self) -> dict[SideName, Side]:
+        """What each side draws: ticks on all four, labels on the bottom and left, and on top
+        for a twin axis. a side left out draws only its spine."""
+        return {
+            "bottom": Side(self.x),
+            "left": Side(self.y),
+            "top": Side(self.x, labelled=False) if self.top is None else Side(self.top),
+            "right": Side(self.y, labelled=False),
+        }
+
+    def _resolved(self) -> dict[SideName, Resolved]:
+        """Each drawn side's majors, minors and tick labels, as many ticks as fit along it at
+        the tick label size."""
         r, size = self._rect(), self._size(self.style.tick_label_size)
-        x_gaps = int(r.width // (3 * size))
-        y_gaps = int(r.height // (2 * size))
-        bottom, left = self.x.resolved(x_gaps), self.y.resolved(y_gaps)
-        return bottom, left, bottom if self.top is None else self.top.resolved(x_gaps)
+        across, up = int(r.width // (3 * size)), int(r.height // (2 * size))
+        return {name: side.axis.resolved(across if name in ("bottom", "top") else up) for name, side in self._sides().items()}
 
     def _decorations(self) -> list[Node]:
-        """Spines, ticks, tick labels and axis labels."""
+        """Spines, ticks, and each labelled side's tick labels and axis label."""
         s, r = self.style, self._rect()
-        size, label_size = self._size(s.tick_label_size), self._size(s.label_size)
-        bottom, left, top = self._resolved()
-        top_scale = self.x.scale if self.top is None else self.top.scale
-
+        sides, resolved = self._sides(), self._resolved()
         major: list[Command] = []
         minor: list[Command] = []
-        for scale, (majors, minors, _), side in (
-            (self.x.scale, bottom, "bottom"),
-            (top_scale, top, "top"),
-            (self.y.scale, left, "left"),
-            (self.y.scale, left, "right"),
-        ):
-            major += self._ticks(scale, majors, side, s.major)
-            minor += self._ticks(scale, minors, side, s.minor)
+        for name, side in sides.items():
+            majors, minors, _ = resolved[name]
+            major += self._ticks(side.axis.scale, majors, name, s.major)
+            minor += self._ticks(side.axis.scale, minors, name, s.minor)
         nodes: list[Node] = [
             Path(tuple(major), stroke=Stroke(s.paint, s.major_width)),
             Path(tuple(minor), stroke=Stroke(s.paint, s.minor_width)),
         ]
         # spines last among the lines, so their corners cover the tick ends
         nodes.append(Rect(r.x0, r.y0, r.width, r.height, stroke=Stroke(s.paint, s.spine)))
-
-        labels = Group(
-            [
-                *(Text(m, x, r.y0 - s.tick_pad, size, "middle", "cap", fill=s.paint) for x, m in self._placed(self.x.scale, bottom, "x")),
-                *(Text(m, r.x0 - s.tick_pad, y, size, "end", "middle", fill=s.paint) for y, m in self._placed(self.y.scale, left, "y")),
-            ]
-        )
-        if self.top is not None:
-            labels.add(*(Text(m, x, r.y1 + s.tick_pad, size, "middle", "baseline", fill=s.paint) for x, m in self._placed(top_scale, top, "x")))
-        nodes.append(labels)
-
-        texts = [t for t in labels.children if isinstance(t, Text)]
-        mid_x, mid_y = (r.x0 + r.x1) / 2, (r.y0 + r.y1) / 2
-        if self.x.label is not None:
-            below = [t for t in texts if t.valign == "cap"]
-            y = min((t.bbox().y0 for t in below), default=r.y0 - s.tick_pad) - s.label_pad
-            nodes.append(Text(self.x.label, mid_x, y, label_size, "middle", "top", fill=s.paint))
-        if self.top is not None and self.top.label is not None:
-            above = [t for t in texts if t.valign == "baseline"]
-            y = max((t.bbox().y1 for t in above), default=r.y1 + s.tick_pad) + s.label_pad
-            nodes.append(Text(self.top.label, mid_x, y, label_size, "middle", "bottom", fill=s.paint))
-        if self.y.label is not None:
-            beside = [t for t in texts if t.anchor == "end"]
-            x = min((t.bbox().x0 for t in beside), default=r.x0 - s.tick_pad) - s.label_pad
-            # read bottom to top, with the text's bottom edge facing the axis
-            turned = Affine.translate(x, mid_y) @ Affine.rotate(math.pi / 2)
-            nodes.append(Group([Text(self.y.label, 0, 0, label_size, "middle", "bottom", fill=s.paint)], transform=turned))
+        for name, side in sides.items():
+            if side.labelled:
+                nodes += self._side_labels(name, side.axis, resolved[name])
         return nodes
 
-    def _ticks(self, scale: Scale, values: Sequence[float], side: str, size: float) -> list[Command]:
+    def _side_labels(self, name: SideName, axis: Axis, resolved: Resolved) -> list[Node]:
+        """One side's tick labels, a tick pad out from the spine, and its axis label a label pad
+        beyond them. side axis labels read bottom to top on the left and top to bottom on the
+        right, their bottom edge facing the axis either way."""
+        s, r = self.style, self._rect()
+        size, label_size = self._size(s.tick_label_size), self._size(s.label_size)
+        majors, _, labels = resolved
+        horizontal = name in ("bottom", "top")
+        start, span = (r.x0, r.width) if horizontal else (r.y0, r.height)
+        at = [(start + f * span, m) for f, m in zip(axis.scale.fraction(majors).tolist(), labels) if -EPS <= f <= 1 + EPS]
+        match name:
+            case "bottom":
+                texts = [Text(m, p, r.y0 - s.tick_pad, size, "middle", "cap", fill=s.paint) for p, m in at]
+            case "top":
+                texts = [Text(m, p, r.y1 + s.tick_pad, size, "middle", "baseline", fill=s.paint) for p, m in at]
+            case "left":
+                texts = [Text(m, r.x0 - s.tick_pad, p, size, "end", "middle", fill=s.paint) for p, m in at]
+            case "right":
+                texts = [Text(m, r.x1 + s.tick_pad, p, size, "start", "middle", fill=s.paint) for p, m in at]
+        ticks = Group(list(texts))
+        if axis.label is None:
+            return [ticks]
+        box = ticks.bbox() or BBox(r.x0 - s.tick_pad, r.y0 - s.tick_pad, r.x1 + s.tick_pad, r.y1 + s.tick_pad)
+        mid_x, mid_y = (r.x0 + r.x1) / 2, (r.y0 + r.y1) / 2
+        match name:
+            case "bottom":
+                label: Node = Text(axis.label, mid_x, box.y0 - s.label_pad, label_size, "middle", "top", fill=s.paint)
+            case "top":
+                label = Text(axis.label, mid_x, box.y1 + s.label_pad, label_size, "middle", "bottom", fill=s.paint)
+            case "left" | "right":
+                x, turn = (box.x0 - s.label_pad, math.pi / 2) if name == "left" else (box.x1 + s.label_pad, -math.pi / 2)
+                turned = Affine.translate(x, mid_y) @ Affine.rotate(turn)
+                label = Group([Text(axis.label, 0, 0, label_size, "middle", "bottom", fill=s.paint)], transform=turned)
+        return [ticks, label]
+
+    def _ticks(self, scale: Scale, values: Sequence[float], side: SideName, size: float) -> list[Command]:
         """Inward tick segments of a length in pt for values along one side."""
         r = self._rect()
         commands: list[Command] = []
@@ -728,15 +772,104 @@ class Axes:
                 commands.append(("L", x + (size if side == "left" else -size), y))
         return commands
 
-    def _placed(
-        self, scale: Scale, resolved: Resolved, direction: str
-    ) -> list[tuple[float, str]]:
-        """(position in pt, markup) for each visible labelled major tick."""
-        majors, _, labels = resolved
+
+class Colorbar(Axes):
+    """A colormap's key: a strip of its colours along a long axis that maps values through the
+    norm, with ticks, tick labels and an axis label on one side and nothing on the others.
+
+    It never gets a panel label. the strip is data, a gradient for a continuous map and a rect
+    per colour for a stepped one (`levels` on the map, or `boundaries` on the norm). notes past
+    an end, such as "$<= 10^(-9)$" for values under the map, go through `text` in axes coords.
+
+    Attributes:
+        cmap (Colormap): the colormap.
+        norm (Norm): maps values to the map; its scale is the long axis.
+        side (SideName): the labelled side, "right" or "left" for a vertical bar, "top" or
+            "bottom" for a horizontal one.
+    """
+
+    def __init__(
+        self,
+        cmap: Colormap,
+        norm: Norm,
+        *,
+        side: SideName = "right",
+        thickness: float | str = "1em",
+        ticks: Sequence[float] | None = None,
+        minor: Sequence[float] | bool | None = None,
+        labels: Sequence[str] | bool = True,
+        label: str | None = None,
+        style: AxesStyle = AxesStyle(),
+    ) -> None:
+        """Sets up the bar; see `Axis` for what each tick and label argument means.
+
+        Args:
+            cmap (Colormap): the colormap.
+            norm (Norm): maps values to the map.
+            side (SideName): the labelled side.
+            thickness (float | str): the strip's short side, pt or a length, fixed in layout.
+            ticks (Sequence[float] | None): major ticks along the long axis.
+            minor (Sequence[float] | bool | None): minor ticks.
+            labels (Sequence[str] | bool): tick labels.
+            label (str | None): the axis label markup (not a panel label, which a bar never has).
+            style (AxesStyle): decoration sizes and paints.
+        """
+        vertical = side in ("left", "right")
+        super().__init__(
+            xlim=(0, 1),
+            ylim=(0, 1),
+            style=style,
+            label=False,
+            width=thickness if vertical else None,
+            height=None if vertical else thickness,
+        )
+        long = Axis(norm.scale, ticks, minor, labels, label)
+        if vertical:
+            self.y = long
+        else:
+            self.x = long
+        self.cmap = cmap
+        self.norm = norm
+        self.side: SideName = side
+        self._data.append(self._strip)
+
+    def _sides(self) -> dict[SideName, Side]:
+        """Only the labelled side draws ticks and labels."""
+        return {self.side: Side(self.y if self.side in ("left", "right") else self.x)}
+
+    def _strip(self) -> Node:
+        """The strip filling the rectangle, split by theme for a map chosen per theme."""
+        if self.cmap.themes:
+            return Themed({name: self._strip_of(m) for name, m in self.cmap.themes.items()})
+        return self._strip_of(self.cmap)
+
+    def _strip_of(self, cmap: Colormap) -> Node:
+        """One map's strip, in pt, lut entries placed along the long axis by the norm."""
         r = self._rect()
-        start, span = (r.x0, r.width) if direction == "x" else (r.y0, r.height)
-        fractions = scale.fraction(majors).tolist()
-        return [(start + f * span, m) for f, m in zip(fractions, labels) if -EPS <= f <= 1 + EPS]
+        vertical = self.side in ("left", "right")
+        entries, edges = cmap.entries(), self.norm.boundaries
+        if cmap.levels is None and edges is None:
+            # the lut sampled evenly, its fraction along the map also its fraction along the axis
+            fractions = np.linspace(0, 1, _GRADIENT_STOPS)
+            stops = tuple(Stop(f, entries[i]) for f, i in zip(fractions.tolist(), cmap.index(fractions).tolist()))
+            end = (0.0, 1.0) if vertical else (1.0, 0.0)
+            return Rect(r.x0, r.y0, r.width, r.height, fill=LinearGradient(stops, 0.0, 0.0, *end))
+        if edges is None:
+            # one band per level, evenly along the axis
+            bounds = np.linspace(0, 1, cmap.size + 1)
+            colours = (bounds[:-1] + bounds[1:]) / 2
+        else:
+            # one band per bin, spaced by the norm's scale, coloured as the norm colours the bin
+            bounds = self.norm.scale.fraction(edges)
+            colours = self.norm.fraction((edges[:-1] + edges[1:]) / 2)
+        bands: list[Node] = []
+        for f0, f1, i in zip(bounds[:-1].tolist(), bounds[1:].tolist(), cmap.index(colours).tolist()):
+            lo, hi = min(f0, f1), max(f0, f1)
+            if vertical:
+                bands.append(Rect(r.x0, r.y0 + lo * r.height, r.width, (hi - lo) * r.height, fill=entries[i]))
+            else:
+                bands.append(Rect(r.x0 + lo * r.width, r.y0, (hi - lo) * r.width, r.height, fill=entries[i]))
+        return Group(bands)
 
 
 def _span(values: np.ndarray) -> Norm:

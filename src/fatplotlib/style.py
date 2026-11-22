@@ -1,7 +1,7 @@
 """paints and strokes.
 
 a paint is a css colour string ("#rrggbb", or "#rrggbbaa" for a colour with alpha), a theme
-`Token`, a `Mix` of two colours, or a `RadialGradient`.
+`Token`, a `Mix` of two colours, or a `RadialGradient` or `LinearGradient`.
 
 colours blend in oklab by default, a perceptual space where a mix halfway between two colours
 looks halfway between them. "srgb" blends the stored channel values, as matplotlib does.
@@ -49,12 +49,12 @@ class Stop:
 
     Attributes:
         offset (float): position along the gradient, 0 to 1.
-        colour (str | Token): the stop colour.
+        colour (str | Token | Mix): the stop colour.
         alpha (float): the stop opacity, 0 to 1.
     """
 
     offset: float
-    colour: str | Token
+    colour: str | Token | Mix
     alpha: float = 1.0
 
 
@@ -76,6 +76,26 @@ class RadialGradient:
 
 
 @dataclass(frozen=True, slots=True)
+class LinearGradient:
+    """A linear gradient in the shape's bounding box units, like `RadialGradient`. the box is
+    measured in scene coordinates, which are y-up, so y = 0 is the box's bottom edge.
+
+    Attributes:
+        stops (tuple[Stop, ...]): colour stops from the start (0) to the end (1).
+        x1 (float): start x as a fraction of the bounding box width.
+        y1 (float): start y as a fraction of the bounding box height, from the bottom.
+        x2 (float): end x.
+        y2 (float): end y.
+    """
+
+    stops: tuple[Stop, ...]
+    x1: float = 0.0
+    y1: float = 0.0
+    x2: float = 1.0
+    y2: float = 0.0
+
+
+@dataclass(frozen=True, slots=True)
 class Mix:
     """Two colours blended, either side a literal or a token, so a mix toward `Token("bg")` follows the theme.
 
@@ -92,7 +112,7 @@ class Mix:
     space: Space = "oklab"
 
 
-type Paint = str | Token | Mix | RadialGradient
+type Paint = str | Token | Mix | RadialGradient | LinearGradient
 
 
 @dataclass(frozen=True, slots=True)

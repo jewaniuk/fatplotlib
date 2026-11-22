@@ -7,11 +7,14 @@ re-solves for a paper or a talk.
 
 the solve uses kiwisolver (cassowary, as matplotlib's constrained layout). every item gets an
 outer box; an axes's inner box (the plot rectangle) sits inside it by margins measured from its
-typst text. rows and columns stack outer boxes with a gap, `ratios` split the inner sizes along
-the stack, and `share` aligns the inner edges across it. the number of ticks depends on the
+typst text, and keeps a fixed `width` or `height` if the axes has one. rows and columns stack
+outer boxes with a gap, `ratios` split the inner sizes of the children without a fixed size, and
+`share` aligns the inner edges across the stack. a stack's own inner box runs from its first
+child's inner edge to its last child's along it, so `Row(Column(a, b, share="x"), bar,
+share="y")` spans the bar from a's top to b's bottom. the number of ticks depends on the
 rectangle and the margins on the ticks, so the solve repeats until the margins settle.
 
-panel labels never take space. each sits in the top-left corner of its item's outer box (an
+panel labels never take space, and colorbars get none. each sits in the top-left corner of its item's outer box (an
 axes's decorations, a panel's drawn content), its left edge on the box's left and its cap height
 on the box's top. then labels across a row share
 the highest top and labels down a column the leftmost left edge.
@@ -247,16 +250,17 @@ class _Box:
         y0 (kiwi.Variable): outer bottom.
         x1 (kiwi.Variable): outer right.
         y1 (kiwi.Variable): outer top.
-        inner (tuple[kiwi.Expression, ...]): inner left, bottom, right and top.
+        inner (tuple[kiwi.Expression | kiwi.Variable, ...]): inner left, bottom, right and top, from the margins;
+            a stack replaces it with its children's edges once they are visited.
     """
 
     def __init__(self, margins: Margins) -> None:
         self.x0, self.y0, self.x1, self.y1 = (kiwi.Variable() for _ in range(4))
         left, bottom, right, top = margins
-        self.inner = (self.x0 + left, self.y0 + bottom, self.x1 - right, self.y1 - top)
+        self.inner: tuple[kiwi.Expression | kiwi.Variable, ...] = (self.x0 + left, self.y0 + bottom, self.x1 - right, self.y1 - top)
 
 
-def _constrain(root: Item, area: BBox, em: float, margins: dict[int, Margins]) -> dict[int, BBox]:
+def _constrain(root: Item, area: BBox, em: float, margins: dict[int, Margins]) -> dict[int, BBox]:  # noqa: C901 - one block per stack rule
     """Solves the layout once for fixed margins.
 
     Returns:
@@ -272,10 +276,15 @@ def _constrain(root: Item, area: BBox, em: float, margins: dict[int, Margins]) -
         solver.addConstraint(x1 >= x0)
         solver.addConstraint(y1 >= y0)
         if not isinstance(item, _Stack):
+            for constraint in _fixed_sizes(item, box, em):
+                solver.addConstraint(constraint)
             return box
         kids = [visit(child) for child in item.children]
         gap = length(item.gap, em)
         row = isinstance(item, Row)
+        # the stack's inner box: first child's inner start to last child's inner end along it
+        first, last = kids[0].inner, kids[-1].inner
+        box.inner = (first[0], box.y0, last[2], box.y1) if row else (box.x0, last[1], box.x1, first[3])
         # along the stack: outer boxes edge to edge with gaps, filling the stack
         if row:
             starts, ends = [k.x0 for k in kids], [k.x1 for k in kids]
@@ -287,10 +296,8 @@ def _constrain(root: Item, area: BBox, em: float, margins: dict[int, Margins]) -
             solver.addConstraint(ends[-1] == box.y0)
         for end, start in zip(ends, starts[1:]):
             solver.addConstraint((start == end + gap) if row else (start == end - gap))
-        # inner sizes along the stack in the given ratios
-        sizes = [k.inner[2] - k.inner[0] if row else k.inner[3] - k.inner[1] for k in kids]
-        for size, ratio in zip(sizes[1:], item.ratios[1:]):
-            solver.addConstraint((size * item.ratios[0] == sizes[0] * ratio) | "strong")
+        for constraint in _ratios(item, kids):
+            solver.addConstraint(constraint)
         # across the stack: inside the stack, filling it where alignment allows
         lo, hi = (1, 3) if row else (0, 2)
         outer_lo, outer_hi = (box.y0, box.y1) if row else (box.x0, box.x1)
@@ -314,6 +321,32 @@ def _constrain(root: Item, area: BBox, em: float, margins: dict[int, Margins]) -
         id(leaf): BBox(*(e.value() for e in boxes[id(leaf)].inner))
         for leaf in _leaves(root)
     }
+
+
+def _fixed(item: Item, row: bool) -> float | str | None:
+    """An item's fixed inner width (along a row) or height (along a column), None if free."""
+    if not isinstance(item, Axes):
+        return None
+    return item.width if row else item.height
+
+
+def _ratios(stack: _Stack, kids: list[_Box]) -> list[kiwi.Constraint]:
+    """Strong constraints splitting the inner sizes along a stack in its ratios, among the
+    children without a fixed size."""
+    row = isinstance(stack, Row)
+    sized = [
+        (k.inner[2] - k.inner[0] if row else k.inner[3] - k.inner[1], ratio)
+        for k, ratio, child in zip(kids, stack.ratios, stack.children)
+        if _fixed(child, row) is None
+    ]
+    return [(size * sized[0][1] == sized[0][0] * ratio) | "strong" for size, ratio in sized[1:]]
+
+
+def _fixed_sizes(leaf: Leaf, box: _Box, em: float) -> list[kiwi.Constraint]:
+    """Required constraints holding a leaf's inner box to its fixed width and height."""
+    x0, y0, x1, y1 = box.inner
+    sizes = ((_fixed(leaf, True), x1 - x0), (_fixed(leaf, False), y1 - y0))
+    return [size == length(fixed, em) for fixed, size in sizes if fixed is not None]
 
 
 def _labels(root: Item, groups: dict[int, Group], em: float) -> list[Text]:

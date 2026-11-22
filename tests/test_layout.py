@@ -4,7 +4,8 @@ import warnings
 
 import pytest
 
-from fatplotlib.axes import Axes
+from fatplotlib.axes import Axes, Colorbar
+from fatplotlib.colormap import DEFAULT, Norm
 from fatplotlib.layout import Column, Figure, Row, Target
 from fatplotlib.panel import Frame, Panel
 from fatplotlib.scene import BBox, Group, Rect, Text
@@ -127,3 +128,25 @@ def test_gap_warns_once_from_the_solved_slot():
     with pytest.warns(UserWarning, match="fills 50%") as caught:
         lone.scene(PAPER)
     assert len(caught) == 1
+
+
+def test_colorbar_spans_a_column_with_a_fixed_width_and_no_letter():
+    a, b, c = plot(), plot(), plot(xlabel="Length")
+    bar = Colorbar(DEFAULT, Norm("log", (1, 1000)), label="Rate")
+    fig = Figure("textwidth", height="4in")
+    fig.layout(Row(Column(a, b, c, share="x"), bar, share="y"))
+    root = fig.scene(PAPER)[0]
+    assert a.inner is not None and c.inner is not None and bar.inner is not None
+    assert bar.inner.y1 == pytest.approx(a.inner.y1) and bar.inner.y0 == pytest.approx(c.inner.y0)
+    assert bar.inner.width == pytest.approx(PAPER.base)
+    assert [t.markup for t in labels(root)] == ["*a*", "*b*", "*c*"]
+
+
+def test_fixed_width_is_kept_and_left_out_of_ratios():
+    left, middle, right = plot(), plot(), plot(width="1in")
+    fig = Figure("textwidth")
+    fig.layout(Row(left, middle, right, share="y"))
+    fig.scene(PAPER)
+    assert left.inner is not None and middle.inner is not None and right.inner is not None
+    assert right.inner.width == pytest.approx(72)
+    assert left.inner.width == pytest.approx(middle.inner.width) and left.inner.width > 72

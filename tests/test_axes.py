@@ -5,10 +5,10 @@ import math
 import numpy as np
 import pytest
 
-from fatplotlib.axes import Axes, Marker
-from fatplotlib.colormap import Colormap, Norm
-from fatplotlib.scene import BBox, Group, Markers, Path, Polylines, Text, Themed
-from fatplotlib.style import Stroke
+from fatplotlib.axes import Axes, Colorbar, Marker
+from fatplotlib.colormap import DEFAULT, Colormap, Norm
+from fatplotlib.scene import BBox, Group, Markers, Path, Polylines, Rect, Text, Themed
+from fatplotlib.style import LinearGradient, Stroke
 
 
 def axes(**kwargs: object) -> Axes:
@@ -171,3 +171,88 @@ def test_grid_lines_sit_at_the_major_ticks_under_the_data():
     tick_starts = [c[1:] for c in majors.commands if c[0] == "M"]
     assert xs == sorted({x for x, y in tick_starts if y == 10})
     assert ys == sorted({y for x, y in tick_starts if x == 20})
+
+
+def strip(bar: Colorbar) -> object:
+    """The first node drawn in a placed colorbar's clipped data."""
+    return bar.group().children[0].children[0]  # pyright: ignore[reportAttributeAccessIssue]
+
+
+def tick_starts(bar: Colorbar) -> list[tuple[float, float]]:
+    """Where each major tick starts, on a spine."""
+    majors = bar._decorations()[0]
+    assert isinstance(majors, Path)
+    return [c[1:] for c in majors.commands if c[0] == "M"]  # pyright: ignore[reportReturnType]
+
+
+def test_vertical_colorbar_labels_the_right_and_fills_a_gradient():
+    bar = Colorbar(DEFAULT, Norm("linear", (0, 1)), label="Rate")
+    bar.place(BBox(100, 10, 109, 110), 9)
+    rect = strip(bar)
+    assert isinstance(rect, Rect) and isinstance(gradient := rect.fill, LinearGradient)
+    assert len(gradient.stops) == 64 and (gradient.x2, gradient.y2) == (0, 1)
+    assert gradient.stops[0].colour == DEFAULT.entries()[0] and gradient.stops[-1].colour == DEFAULT.entries()[-1]
+    assert {x for x, _ in tick_starts(bar)} == {109}
+    ticks, label = bar._decorations()[3:]
+    assert isinstance(ticks, Group) and all(isinstance(t, Text) and t.anchor == "start" for t in ticks.children)
+    # the axis label reads top to bottom, past the tick labels
+    assert isinstance(label, Group) and label.transform is not None
+    assert (box := label.bbox()) is not None and (tbox := ticks.bbox()) is not None and box.x0 > tbox.x1
+    assert bar.label is False and bar.width == "1em" and bar.height is None
+
+
+def test_horizontal_colorbar_labels_below_and_runs_the_gradient_along_x():
+    bar = Colorbar(DEFAULT, Norm("linear", (0, 1)), side="bottom")
+    bar.place(BBox(10, 10, 110, 19), 9)
+    rect = strip(bar)
+    assert isinstance(rect, Rect) and isinstance(gradient := rect.fill, LinearGradient)
+    assert (gradient.x2, gradient.y2) == (1, 0)
+    assert {y for _, y in tick_starts(bar)} == {10}
+    (ticks,) = bar._decorations()[3:]
+    assert isinstance(ticks, Group) and all(isinstance(t, Text) and t.valign == "cap" for t in ticks.children)
+
+
+def test_log_colorbar_ticks_decades_with_minors():
+    bar = Colorbar(DEFAULT, Norm("log", (1e-9, 1e7)), ticks=(1e-9, 1e-5, 1e-1, 1e3, 1e7))
+    bar.place(BBox(100, 10, 109, 110), 9)
+    _, minors, labels = bar._resolved()["right"]
+    assert labels[1] == "$10^(-5)$" and minors
+    ys = sorted(y for _, y in tick_starts(bar))
+    assert np.allclose(ys, [10, 35, 60, 85, 110])
+
+
+def test_stepped_colorbars_stack_a_rect_per_level_or_bin():
+    cmap = Colormap("#ffffff", "#fc69a0", levels=4)
+    bar = Colorbar(cmap, Norm("linear", (0, 1)))
+    bar.place(BBox(100, 10, 109, 110), 9)
+    bands = strip(bar)
+    assert isinstance(bands, Group)
+    assert [(r.y, r.height, r.fill) for r in bands.children] == [  # pyright: ignore[reportAttributeAccessIssue]
+        (10 + 25 * i, 25, cmap.entries()[i]) for i in range(4)
+    ]
+    cmap = Colormap("#ffffff", "#fc69a0", levels=3)
+    bar = Colorbar(cmap, Norm("linear", (0, 1), boundaries=[0, 0.5, 0.75, 1]))
+    bar.place(BBox(100, 10, 109, 110), 9)
+    bands = strip(bar)
+    assert isinstance(bands, Group)
+    assert [(r.y, r.height, r.fill) for r in bands.children] == [  # pyright: ignore[reportAttributeAccessIssue]
+        (10, 50, cmap.entries()[0]),
+        (60, 25, cmap.entries()[1]),
+        (85, 25, cmap.entries()[2]),
+    ]
+
+
+def test_per_theme_colorbar_strip_splits_by_theme():
+    cmap = Colormap.per_theme(light=Colormap("#ffffff", "#000000"), dark=Colormap("#000000", "#ffffff"))
+    bar = Colorbar(cmap, Norm("linear", (0, 1)))
+    bar.place(BBox(100, 10, 109, 110), 9)
+    themed = strip(bar)
+    assert isinstance(themed, Themed) and set(themed.children) == {"light", "dark"}
+
+
+def test_colorbar_notes_go_through_text_past_an_end():
+    bar = Colorbar(DEFAULT, Norm("log", (1e-9, 1e7)))
+    bar.place(BBox(100, 10, 109, 110), 9)
+    bar.text("$<= 10^(-9)$", (0.5, -0.05), "axes", anchor="middle", valign="top")
+    # the note hangs from 5 pt below the bar, and counts toward the outer box
+    assert bar.outer().y0 < 5

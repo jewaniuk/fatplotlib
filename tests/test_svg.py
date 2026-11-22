@@ -9,7 +9,7 @@ import resvg_py
 from fatplotlib.paths import PathBuilder
 from fatplotlib.render.svg import render
 from fatplotlib.scene import BBox, Circle, Group, Markers, Polylines, Rect, Text
-from fatplotlib.style import RadialGradient, Stop, Stroke, with_alpha
+from fatplotlib.style import LinearGradient, Mix, RadialGradient, Stop, Stroke, Token, with_alpha
 from fatplotlib.theme import LIGHT
 from fatplotlib.transform import Affine
 
@@ -94,3 +94,13 @@ def test_markers_emit_one_path_with_the_shape_at_each_finite_point():
     assert "M9 5l2 0m-1 -1l0 2" in cross
     ET.fromstring(svg)
     resvg_py.svg_to_bytes(svg_string=svg, dpi=72)
+
+
+def test_linear_gradient_stops_follow_the_theme():
+    fade = LinearGradient((Stop(0, Token("bg")), Stop(1, Mix(Token("bg"), "#fc69a0", 0.5))), 0, 0, 0, 1)
+    preview = render(Rect(0, 0, 10, 100, fill=fade), 10, 100)
+    assert '<linearGradient id="grad-' in preview and 'x1="0" y1="0" x2="0" y2="1"' in preview
+    assert "stop-color:color-mix(in oklab, var(--bg), #fc69a0 50%)" in preview
+    exported = render(Rect(0, 0, 10, 100, fill=fade), 10, 100, LIGHT)
+    assert "var(" not in exported and 'stop-color="#ffffff"' in exported
+    ET.fromstring(exported)

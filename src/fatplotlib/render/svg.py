@@ -32,7 +32,7 @@ from fatplotlib.scene import (
     Text,
     Themed,
 )
-from fatplotlib.style import Mix, Paint, RadialGradient, Stroke, Token
+from fatplotlib.style import LinearGradient, Mix, Paint, RadialGradient, Stroke, Token
 from fatplotlib.theme import Theme
 
 
@@ -68,7 +68,7 @@ def _resolved(node: Node, theme: Theme) -> Node:
     """A copy of the scene with every token replaced by the theme's value."""
 
     def paint(value: Paint | None) -> Paint | None:
-        if isinstance(value, RadialGradient):
+        if isinstance(value, (RadialGradient, LinearGradient)):
             stops = tuple(replace(stop, colour=theme.colour(stop.colour)) for stop in value.stops)
             return replace(value, stops=stops)
         return value if value is None else theme.colour(value)
@@ -112,7 +112,7 @@ def _paint(prop: str, paint: Paint | None, defs: dict[str, str]) -> tuple[list[t
         case Mix(a, b, t, space):
             a_css, b_css = (f"var(--{c.name})" if isinstance(c, Token) else c for c in (a, b))
             return [], [f"{prop}:color-mix(in {space}, {a_css}, {b_css} {_num(t * 100)}%)"]
-        case RadialGradient():
+        case RadialGradient() | LinearGradient():
             return [(prop, f"url(#{_gradient(paint, defs)})")], []
         case str() if len(paint) == 9 and paint.startswith("#"):
             return [(prop, paint[:7]), (f"{prop}-opacity", _num(int(paint[7:], 16) / 255))], []
@@ -120,7 +120,7 @@ def _paint(prop: str, paint: Paint | None, defs: dict[str, str]) -> tuple[list[t
             return [(prop, paint)], []
 
 
-def _gradient(gradient: RadialGradient, defs: dict[str, str]) -> str:
+def _gradient(gradient: RadialGradient | LinearGradient, defs: dict[str, str]) -> str:
     """Adds a gradient to the defs once and returns its id."""
     stops = []
     for stop in gradient.stops:
@@ -129,9 +129,13 @@ def _gradient(gradient: RadialGradient, defs: dict[str, str]) -> str:
             pairs.append(("stop-opacity", _num(stop.alpha)))
         stops.append(f"<stop{_attrs([('offset', _num(stop.offset)), *pairs], style)}/>")
     inner = "".join(stops)
-    geometry = f'cx="{_num(gradient.cx)}" cy="{_num(gradient.cy)}" r="{_num(gradient.r)}"'
+    if isinstance(gradient, RadialGradient):
+        tag, geometry = "radialGradient", f'cx="{_num(gradient.cx)}" cy="{_num(gradient.cy)}" r="{_num(gradient.r)}"'
+    else:
+        g = gradient
+        tag, geometry = "linearGradient", f'x1="{_num(g.x1)}" y1="{_num(g.y1)}" x2="{_num(g.x2)}" y2="{_num(g.y2)}"'
     gid = "grad-" + hashlib.sha1(f"{geometry}{inner}".encode()).hexdigest()[:10]
-    defs.setdefault(gid, f'<radialGradient id="{gid}" {geometry}>{inner}</radialGradient>')
+    defs.setdefault(gid, f'<{tag} id="{gid}" {geometry}>{inner}</{tag}>')
     return gid
 
 
