@@ -11,7 +11,9 @@ typst text, and keeps a fixed `width` or `height` if the axes has one. rows and 
 outer boxes with a gap, `ratios` split the inner sizes of the children without a fixed size, and
 `share` aligns the inner edges across the stack. a stack's own inner box runs from its first
 child's inner edge to its last child's along it, so `Row(Column(a, b, share="x"), bar,
-share="y")` spans the bar from a's top to b's bottom. the number of ticks depends on the
+share="y")` spans the bar from a's top to b's bottom. across a sharing stack it is the shared
+inner edges, so `Column(a, Row(b, bar, share="y"), share="x")` splits a's and b's heights by
+the ratios, not a's height against the row's outer box. the number of ticks depends on the
 rectangle and the margins on the ticks, so the solve repeats until the margins settle.
 
 panel labels never take space, and colorbars get none. each sits in the top-left corner of its item's outer box (an
@@ -282,9 +284,15 @@ def _constrain(root: Item, area: BBox, em: float, margins: dict[int, Margins]) -
         kids = [visit(child) for child in item.children]
         gap = length(item.gap, em)
         row = isinstance(item, Row)
-        # the stack's inner box: first child's inner start to last child's inner end along it
+        # the stack's inner box: first child's inner start to last child's inner end along it, and
+        # across it the shared inner edges, or the outer box if the children are not aligned
         first, last = kids[0].inner, kids[-1].inner
-        box.inner = (first[0], box.y0, last[2], box.y1) if row else (box.x0, last[1], box.x1, first[3])
+        if row:
+            bottom, top = (first[1], first[3]) if item.share else (box.y0, box.y1)
+            box.inner = (first[0], bottom, last[2], top)
+        else:
+            left, right = (first[0], first[2]) if item.share else (box.x0, box.x1)
+            box.inner = (left, last[1], right, first[3])
         # along the stack: outer boxes edge to edge with gaps, filling the stack
         if row:
             starts, ends = [k.x0 for k in kids], [k.x1 for k in kids]

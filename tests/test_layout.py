@@ -150,3 +150,14 @@ def test_fixed_width_is_kept_and_left_out_of_ratios():
     assert left.inner is not None and middle.inner is not None and right.inner is not None
     assert right.inner.width == pytest.approx(72)
     assert left.inner.width == pytest.approx(middle.inner.width) and left.inner.width > 72
+
+
+def test_sharing_row_in_a_column_takes_its_ratio_on_the_shared_inner_height():
+    top, bottom = plot(), plot(xlabel="Length")
+    bar = Colorbar(DEFAULT, Norm("log", (1, 1000)), label="Rate")
+    fig = Figure(height="4in")
+    fig.layout(Column(top, Row(bottom, bar, share="y"), share="x"))
+    fig.scene(PAPER)
+    assert top.inner is not None and bottom.inner is not None and bar.inner is not None
+    assert bottom.inner.height == pytest.approx(top.inner.height)
+    assert top.inner.x1 == pytest.approx(bar.inner.x1)
