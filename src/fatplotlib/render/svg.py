@@ -12,7 +12,7 @@ import hashlib
 from dataclasses import replace
 from html import escape
 
-from fatplotlib.scene import BBox, Circle, Group, Node, Path, Rect, Shape, Text
+from fatplotlib.scene import BBox, Circle, Ellipse, Group, Node, Path, Rect, Shape, Text
 from fatplotlib.style import Paint, RadialGradient, Stroke, Token
 from fatplotlib.theme import Theme
 
@@ -184,6 +184,9 @@ def _node(node: Node, defs: dict[str, str]) -> str:
         case Circle():
             geometry = [("cx", _num(node.cx)), ("cy", _num(node.cy)), ("r", _num(node.r))]
             return f"<circle{_shape_attrs(node, geometry, defs)}/>"
+        case Ellipse():
+            geometry = [("cx", _num(node.cx)), ("cy", _num(node.cy)), ("rx", _num(node.rx)), ("ry", _num(node.ry))]
+            return f"<ellipse{_shape_attrs(node, geometry, defs)}/>"
         case Text():
             shape = node.shape()
             for gid, element in shape.defs:

@@ -295,6 +295,31 @@ class Circle(Shape):
 
 
 @dataclass(slots=True)
+class Ellipse(Shape):
+    """An axis-aligned ellipse; rotate one with a `Group` transform.
+
+    Attributes:
+        cx (float): centre x.
+        cy (float): centre y.
+        rx (float): x radius.
+        ry (float): y radius.
+    """
+
+    cx: float
+    cy: float
+    rx: float
+    ry: float
+
+    def bbox(self) -> BBox:
+        """The box around the ellipse, stroke included.
+
+        Returns:
+            BBox: the box.
+        """
+        return BBox(self.cx - self.rx, self.cy - self.ry, self.cx + self.rx, self.cy + self.ry).padded(self._pad())
+
+
+@dataclass(slots=True)
 class Text(Node):
     """Typst markup set at a point.
 
