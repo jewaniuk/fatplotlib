@@ -129,3 +129,45 @@ def test_per_theme_colormap_markers_split_by_theme():
     ax.markers([1, 2], [10, 100], values=[0, 1], cmap=cmap)
     node = ax.group().children[0].children[0]  # pyright: ignore[reportAttributeAccessIssue]
     assert isinstance(node, Themed) and set(node.children) == {"light", "dark"}
+
+
+def test_heatmap_groups_cells_by_colour_and_skips_or_colours_bad_cells():
+    ax = axes()
+    z = [[0.0, 1.0], [np.nan, 0.1]]
+    ax.heatmap([0, 5, 10], [1, 10, 1000], z, Colormap("#000000", "#ffffff", levels=2))
+    ax.heatmap([0, 5, 10], [1, 10, 1000], z, Colormap("#000000", "#ffffff", levels=2, bad="#ff0000"))
+    plain, with_bad = ax.group().children[0].children  # pyright: ignore[reportAttributeAccessIssue]
+    assert [p.fill for p in plain.children] == ["#000000", "#ffffff"]
+    assert [p.fill for p in with_bad.children] == ["#ff0000", "#000000", "#ffffff"]
+    dark = plain.children[0]
+    assert [c[0] for c in dark.commands].count("M") == 2
+    # cell (1, 1): x 5 to 10 is 70 to 120 pt, y 10 to 1000 is a third of the way up to the top
+    assert np.allclose([c[1:] for c in dark.commands[5:9]], [(70, 10 + 50 / 3), (120, 10 + 50 / 3), (120, 60), (70, 60)])
+
+
+def test_fill_between_closes_a_region_per_finite_run():
+    ax = axes()
+    ax.fill_between([0, 1, 2, 3, 4], 1, [10, 10, np.nan, 10, 10], "#000000")
+    path = ax.group().children[0].children[0]  # pyright: ignore[reportAttributeAccessIssue]
+    ops = [c[0] for c in path.commands]
+    assert ops == ["M", "L", "L", "L", "Z", "M", "L", "L", "L", "Z"]
+    # along the top, then back along the flat bottom
+    assert np.allclose([c[1:] for c in path.commands[:4]], [(20, 10 + 50 / 3), (30, 10 + 50 / 3), (30, 10), (20, 10)])
+
+
+def test_grid_lines_sit_at_the_major_ticks_under_the_data():
+    ax = axes()
+    ax.line([0, 10], [1, 1000], Stroke("#000000"))
+    ax.grid("both")
+    data = ax.group().children[0]
+    assert isinstance(data, Group)
+    grid = data.children[0]
+    assert isinstance(grid, Path)
+    starts = [c[1:] for c in grid.commands if c[0] == "M"]
+    xs = sorted({x for x, y in starts if y == 10})
+    ys = sorted({y for x, y in starts if x == 20})
+    majors = ax._decorations()[0]  # the major tick path, starting each tick on a spine
+    assert isinstance(majors, Path)
+    tick_starts = [c[1:] for c in majors.commands if c[0] == "M"]
+    assert xs == sorted({x for x, y in tick_starts if y == 10})
+    assert ys == sorted({y for x, y in tick_starts if x == 20})

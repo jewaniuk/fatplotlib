@@ -43,4 +43,4 @@ extend-select = ["I", "C901", "PLR0911", "PLR0912", "PLR0915", "PLR0917"]
 
 [tool.ruff.lint.flake8-bugbear]
 # frozen dataclasses, safe to share as defaults
-extend-immutable-calls = ["fatplotlib.style.Token", "fatplotlib.axes.AxesStyle", "fatplotlib.axes.Marker"]
+extend-immutable-calls = ["fatplotlib.style.Token", "fatplotlib.style.Stroke", "fatplotlib.axes.AxesStyle", "fatplotlib.axes.Marker"]

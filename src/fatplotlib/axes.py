@@ -1,11 +1,11 @@
 """axes: scales, ticks, spines and data drawing on a rectangle that layout places.
 
-an `Axes` is built before it has a rectangle: `line`, `lines`, `markers`, `arrow`, `text`, `draw` and
-`inset` record what to draw, and `group()` builds the scene nodes once `place` has given the rectangle
-(`inner`) and the font size that em lengths scale. around the rectangle it draws spines on all four
-sides, inward major and minor ticks on every side, typst tick labels and axis labels on the bottom and
-left (and on top for a twin axis). data drawn with `line`, `lines`, `markers`, `arrow` and `draw` is
-clipped to the rectangle, `text`, unclipped markers and insets are not. `outer()` is the box the
+an `Axes` is built before it has a rectangle: `line`, `lines`, `markers`, `heatmap`, `fill_between`,
+`grid`, `arrow`, `text`, `draw` and `inset` record what to draw, and `group()` builds the scene nodes
+once `place` has given the rectangle (`inner`) and the font size that em lengths scale. around the
+rectangle it draws spines on all four sides, inward major and minor ticks on every side, typst tick
+labels and axis labels on the bottom and left (and on top for a twin axis). data (everything but
+`text`, unclipped markers and insets) is clipped to the rectangle, with the grid under it. `outer()` is the box the
 decorations and notes (text, unclipped markers) reach, which layout measures.
 
 ticks follow `Scale`'s nice-number rule, with `max_gaps` from the axis length and label size, as
@@ -32,6 +32,9 @@ from fatplotlib.units import length
 type Coords = Literal["data", "axes"]
 """what a position means: data values, or fractions of the axes rectangle (0 to 1)."""
 
+type Resolved = tuple[list[float], list[float], list[str]]
+"""an axis's major ticks, minor ticks and tick labels, as `Axis.resolved` gives them."""
+
 @dataclass(slots=True)
 class Axis:
     """The ticks and labels along one side of an axes.
@@ -52,14 +55,14 @@ class Axis:
     labels: Sequence[str] | bool = True
     label: str | None = None
 
-    def resolved(self, max_gaps: int) -> tuple[list[float], list[float], list[str]]:
+    def resolved(self, max_gaps: int) -> Resolved:
         """The major ticks, minor ticks and tick labels to draw.
 
         Args:
             max_gaps (int): the most gaps between automatic major ticks.
 
         Returns:
-            tuple[list[float], list[float], list[str]]: majors, minors and one label per major
+            Resolved: majors, minors and one label per major
                 (empty if labels are off).
         """
         majors = list(self.ticks) if self.ticks is not None else self.scale.ticks(max_gaps)
@@ -333,23 +336,130 @@ class Axes:
         if values is None:
             return Markers(px, py, marker.shape, size, fill=marker.fill, stroke=marker.stroke, **node)  # pyright: ignore[reportArgumentType]
         v = np.ravel(np.asarray(values, dtype=float))
-        norm = norm or Norm("linear", (float(np.nanmin(v)), float(np.nanmax(v))))
-        fractions = norm.fraction(v)
 
-        def grouped(cmap: Colormap) -> list[Node]:
-            """One `Markers` per lut index present, bad points left out unless the map colours them."""
-            index = cmap.index(fractions)
-            groups: list[Node] = []
-            for i in np.unique(index).tolist():
-                paint = cmap.paint(i)
-                if paint is not None:
-                    chosen = index == i
-                    groups.append(Markers(px[chosen], py[chosen], marker.shape, size, fill=paint, stroke=marker.stroke))
-            return groups
+        def build(chosen: np.ndarray, paint: Paint) -> Markers:
+            """The markers of one colour."""
+            return Markers(px[chosen], py[chosen], marker.shape, size, fill=paint, stroke=marker.stroke)
 
-        if cmap.themes:
-            return Themed({name: Group(grouped(m)) for name, m in cmap.themes.items()}, **node)  # pyright: ignore[reportArgumentType]
-        return Group(grouped(cmap), **node)  # pyright: ignore[reportArgumentType]
+        return _by_colour(cmap, (norm or _span(v)).fraction(v), build, node)
+
+    def heatmap(
+        self,
+        x_edges: ArrayLike,
+        y_edges: ArrayLike,
+        z: ArrayLike,
+        cmap: Colormap = DEFAULT,
+        norm: Norm | None = None,
+        *,
+        edges: Stroke | None = None,
+        **node: object,
+    ) -> None:
+        """Fills a grid of cells by value, clipped like data. cells of one colour are one path of
+        rectangles, so they meet without seams; nan cells take `cmap.bad`, or are not drawn.
+
+        Args:
+            x_edges (ArrayLike): cell edges along x in data values, shape (nx + 1,).
+            y_edges (ArrayLike): cell edges along y, shape (ny + 1,).
+            z (ArrayLike): a value per cell, shape (nx, ny), as `np.meshgrid(..., indexing="ij")` gives.
+            cmap (Colormap): the colormap.
+            norm (Norm | None): maps z to the colormap, linear over its finite range if None.
+            edges (Stroke | None): an outline around every cell, none if None.
+            **node (object): other node fields such as id or alpha, on the group of cells.
+        """
+        self._data.append(lambda: self._heatmap(x_edges, y_edges, z, cmap, norm, edges=edges, node=node))
+
+    def _heatmap(
+        self,
+        x_edges: ArrayLike,
+        y_edges: ArrayLike,
+        z: ArrayLike,
+        cmap: Colormap,
+        norm: Norm | None,
+        *,
+        edges: Stroke | None,
+        node: dict[str, object],
+    ) -> Node:
+        """The cells for `heatmap`, in pt, one `Path` per lut colour."""
+        r = self._rect()
+        px = (r.x0 + self.x.scale.fraction(x_edges) * r.width).tolist()
+        py = (r.y0 + self.y.scale.fraction(y_edges) * r.height).tolist()
+        values = np.asarray(z, dtype=float)
+        # cells with an edge the scale cannot map (log of values <= 0) are left out
+        drawable = np.isfinite(px[:-1]) & np.isfinite(px[1:])
+        drawable = drawable[:, None] & (np.isfinite(py[:-1]) & np.isfinite(py[1:]))[None, :]
+
+        def build(chosen: np.ndarray, paint: Paint) -> Path:
+            """The cells of one colour, a closed rectangle each."""
+            commands: list[Command] = []
+            for i, j in zip(*(a.tolist() for a in np.nonzero(chosen & drawable))):
+                x0, x1, y0, y1 = px[i], px[i + 1], py[j], py[j + 1]
+                commands += [("M", x0, y0), ("L", x1, y0), ("L", x1, y1), ("L", x0, y1), ("Z",)]
+            return Path(tuple(commands), fill=paint, stroke=edges)
+
+        return _by_colour(cmap, (norm or _span(values)).fraction(values), build, node)
+
+    def fill_between(
+        self,
+        x: ArrayLike,
+        y0: ArrayLike,
+        y1: ArrayLike,
+        fill: Paint,
+        stroke: Stroke | None = None,
+        **node: object,
+    ) -> None:
+        """Fills between two curves sharing x, clipped like data, as one path with a closed
+        region per run of points that can all be mapped.
+
+        Args:
+            x (ArrayLike): x positions.
+            y0 (ArrayLike): one edge's y positions, or one value for a flat edge.
+            y1 (ArrayLike): the other edge's y positions, or one value.
+            fill (Paint): the fill paint.
+            stroke (Stroke | None): the outline of each region, none if None.
+            **node (object): other `Path` fields such as id or alpha.
+        """
+        self._data.append(lambda: self._fill_between(x, y0, y1, fill, stroke, node))
+
+    def _fill_between(  # noqa: PLR0917 - private, mirrors fill_between
+        self, x: ArrayLike, y0: ArrayLike, y1: ArrayLike, fill: Paint, stroke: Stroke | None, node: dict[str, object]
+    ) -> Path:
+        """The regions for `fill_between`, in pt: along y1, back along y0, closed."""
+        xs, lows, highs = np.broadcast_arrays(*(np.asarray(v, dtype=float) for v in (x, y0, y1)))
+        px, p0 = self.to_pt(xs, lows)
+        _, p1 = self.to_pt(xs, highs)
+        finite = np.isfinite(px) & np.isfinite(p0) & np.isfinite(p1)
+        # runs of finite points: starts where finite turns on, ends where it turns off
+        edges = np.diff(np.concatenate([[False], finite, [False]]).astype(int))
+        commands: list[Command] = []
+        for start, stop in zip(np.flatnonzero(edges == 1).tolist(), np.flatnonzero(edges == -1).tolist()):
+            top = list(zip(px[start:stop].tolist(), p1[start:stop].tolist()))
+            bottom = list(zip(px[start:stop].tolist(), p0[start:stop].tolist()))[::-1]
+            commands.append(("M", *top[0]))
+            commands += [("L", *point) for point in top[1:] + bottom]
+            commands.append(("Z",))
+        return Path(tuple(commands), fill=fill, stroke=stroke, **node)  # pyright: ignore[reportArgumentType]
+
+    def grid(self, axis: Literal["x", "y", "both"] = "y", stroke: Stroke = Stroke(Token("grid"), Token("hair"))) -> None:
+        """Draws lines across the rectangle at the major ticks, under all data.
+
+        Args:
+            axis (Literal["x", "y", "both"]): "y" draws horizontal lines at the left axis's ticks,
+                "x" vertical lines at the bottom axis's ticks.
+            stroke (Stroke): the line style.
+        """
+
+        def build() -> Path:
+            """The grid lines: ticks as long as the rectangle."""
+            r = self._rect()
+            bottom, left, _ = self._resolved()
+            commands: list[Command] = []
+            if axis in ("x", "both"):
+                commands += self._ticks(self.x.scale, bottom[0], "bottom", r.height)
+            if axis in ("y", "both"):
+                commands += self._ticks(self.y.scale, left[0], "left", r.width)
+            return Path(tuple(commands), stroke=stroke)
+
+        self._data.insert(0, build)
 
     def _line(self, x: ArrayLike, y: ArrayLike, stroke: Stroke, coords: Coords, node: dict[str, object]) -> Path:
         """The polyline for `line`, in pt."""
@@ -540,14 +650,20 @@ class Axes:
         """A length in pt, em resolved against the placed font size."""
         return length(value, self._em())
 
+    def _resolved(self) -> tuple[Resolved, Resolved, Resolved]:
+        """The bottom, left and top axes' majors, minors and tick labels, as many ticks as fit
+        the rectangle at the tick label size."""
+        r, size = self._rect(), self._size(self.style.tick_label_size)
+        x_gaps = int(r.width // (3 * size))
+        y_gaps = int(r.height // (2 * size))
+        bottom, left = self.x.resolved(x_gaps), self.y.resolved(y_gaps)
+        return bottom, left, bottom if self.top is None else self.top.resolved(x_gaps)
+
     def _decorations(self) -> list[Node]:
         """Spines, ticks, tick labels and axis labels."""
         s, r = self.style, self._rect()
         size, label_size = self._size(s.tick_label_size), self._size(s.label_size)
-        x_gaps = int(r.width // (3 * size))
-        y_gaps = int(r.height // (2 * size))
-        bottom, left = self.x.resolved(x_gaps), self.y.resolved(y_gaps)
-        top = bottom if self.top is None else self.top.resolved(x_gaps)
+        bottom, left, top = self._resolved()
         top_scale = self.x.scale if self.top is None else self.top.scale
 
         major: list[Command] = []
@@ -613,7 +729,7 @@ class Axes:
         return commands
 
     def _placed(
-        self, scale: Scale, resolved: tuple[list[float], list[float], list[str]], direction: str
+        self, scale: Scale, resolved: Resolved, direction: str
     ) -> list[tuple[float, str]]:
         """(position in pt, markup) for each visible labelled major tick."""
         majors, _, labels = resolved
@@ -621,6 +737,26 @@ class Axes:
         start, span = (r.x0, r.width) if direction == "x" else (r.y0, r.height)
         fractions = scale.fraction(majors).tolist()
         return [(start + f * span, m) for f, m in zip(fractions, labels) if -EPS <= f <= 1 + EPS]
+
+
+def _span(values: np.ndarray) -> Norm:
+    """A linear norm over the finite values."""
+    return Norm("linear", (float(np.nanmin(values)), float(np.nanmax(values))))
+
+
+def _by_colour[N: Node](
+    cmap: Colormap, fractions: np.ndarray, build: Callable[[np.ndarray, Paint], N], node: dict[str, object]
+) -> Node:
+    """One node per lut colour present, built from a mask of the items with that colour (bad
+    items left out unless the map colours them), split by theme for a per-theme map."""
+
+    def grouped(cmap: Colormap) -> list[Node]:
+        index = cmap.index(fractions)
+        return [build(index == i, paint) for i in np.unique(index).tolist() if (paint := cmap.paint(i)) is not None]
+
+    if cmap.themes:
+        return Themed({name: Group(grouped(m)) for name, m in cmap.themes.items()}, **node)  # pyright: ignore[reportArgumentType]
+    return Group(grouped(cmap), **node)  # pyright: ignore[reportArgumentType]
 
 
 def _visible(fractions: np.ndarray) -> list[float]:
