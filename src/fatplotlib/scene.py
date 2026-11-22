@@ -307,7 +307,8 @@ class Text(Node):
         y (float): anchor y.
         size (float): font size in pt.
         anchor (Literal["start", "middle", "end"]): which part of the box sits at x.
-        valign (Literal["baseline", "top", "middle", "bottom"]): which part of the box sits at y.
+        valign (Literal["baseline", "cap", "top", "middle", "bottom"]): which part of the box sits
+            at y; "cap" is the top of capitals and digits, so labels hang from their ink.
         font (str | None): font family, the preamble's if None.
         fill (Paint): the text colour, the theme's foreground by default.
     """
@@ -317,7 +318,7 @@ class Text(Node):
     y: float
     size: float
     anchor: Literal["start", "middle", "end"] = "start"
-    valign: Literal["baseline", "top", "middle", "bottom"] = "baseline"
+    valign: Literal["baseline", "cap", "top", "middle", "bottom"] = "baseline"
     font: str | None = None
     fill: Paint = Token("fg")
 
@@ -337,7 +338,7 @@ class Text(Node):
         """
         shape = self.shape()
         left = self.x - {"start": 0.0, "middle": 0.5, "end": 1.0}[self.anchor] * shape.width
-        drop = {"baseline": shape.baseline, "top": 0.0, "middle": shape.height / 2, "bottom": shape.height}
+        drop = {"baseline": shape.baseline, "cap": shape.cap, "top": 0.0, "middle": shape.height / 2, "bottom": shape.height}
         return left, self.y + drop[self.valign]
 
     def bbox(self) -> BBox:

@@ -217,7 +217,7 @@ class AxesStyle:
         label_size (float): axis label and `text` font size in pt.
         major (float): major tick length in pt.
         minor (float): minor tick length in pt.
-        tick_pad (float): gap from the spine to the tick labels in pt.
+        tick_pad (float): gap from the spine to the tick labels' ink (cap height below, baseline above) in pt.
         label_pad (float): gap from the tick labels to the axis label in pt.
         spine (float | Token): spine weight.
         major_width (float | Token): major tick weight.
@@ -419,7 +419,7 @@ class Axes:
         *,
         size: float | None = None,
         anchor: Literal["start", "middle", "end"] = "start",
-        valign: Literal["baseline", "top", "middle", "bottom"] = "baseline",
+        valign: Literal["baseline", "cap", "top", "middle", "bottom"] = "baseline",
         fill: Paint | None = None,
     ) -> Text:
         """Sets typst markup at a position, unclipped.
@@ -430,7 +430,7 @@ class Axes:
             coords (Coords): what the position means.
             size (float | None): font size in pt, the style's label size if None.
             anchor (Literal["start", "middle", "end"]): which part of the text sits at x.
-            valign (Literal["baseline", "top", "middle", "bottom"]): which part sits at y.
+            valign (Literal["baseline", "cap", "top", "middle", "bottom"]): which part sits at y.
             fill (Paint | None): text colour, the style's paint if None.
 
         Returns:
@@ -491,22 +491,22 @@ class Axes:
         size = s.tick_label_size
         labels = Group(
             [
-                *(Text(m, x, r.y0 - s.tick_pad, size, "middle", "top", fill=s.paint) for x, m in self._placed(self.x.scale, bottom, "x")),
+                *(Text(m, x, r.y0 - s.tick_pad, size, "middle", "cap", fill=s.paint) for x, m in self._placed(self.x.scale, bottom, "x")),
                 *(Text(m, r.x0 - s.tick_pad, y, size, "end", "middle", fill=s.paint) for y, m in self._placed(self.y.scale, left, "y")),
             ]
         )
         if self.top is not None:
-            labels.add(*(Text(m, x, r.y1 + s.tick_pad, size, "middle", "bottom", fill=s.paint) for x, m in self._placed(top_scale, top, "x")))
+            labels.add(*(Text(m, x, r.y1 + s.tick_pad, size, "middle", "baseline", fill=s.paint) for x, m in self._placed(top_scale, top, "x")))
         nodes.append(labels)
 
         texts = [t for t in labels.children if isinstance(t, Text)]
         mid_x, mid_y = (r.x0 + r.x1) / 2, (r.y0 + r.y1) / 2
         if self.x.label is not None:
-            below = [t for t in texts if t.valign == "top"]
+            below = [t for t in texts if t.valign == "cap"]
             y = min((t.bbox().y0 for t in below), default=r.y0 - s.tick_pad) - s.label_pad
             nodes.append(Text(self.x.label, mid_x, y, s.label_size, "middle", "top", fill=s.paint))
         if self.top is not None and self.top.label is not None:
-            above = [t for t in texts if t.valign == "bottom"]
+            above = [t for t in texts if t.valign == "baseline"]
             y = max((t.bbox().y1 for t in above), default=r.y1 + s.tick_pad) + s.label_pad
             nodes.append(Text(self.top.label, mid_x, y, s.label_size, "middle", "bottom", fill=s.paint))
         if self.y.label is not None:

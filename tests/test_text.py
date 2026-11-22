@@ -15,3 +15,11 @@ def test_tall_math_keeps_text_baseline():
     plain, tall = typeset("x", 8), typeset("$display(1/2)$", 8)
     assert tall.height > plain.height
     assert tall.baseline > plain.baseline
+
+
+def test_cap_height_sits_between_top_and_baseline_for_any_string():
+    shapes = [typeset(s, 8) for s in ("x", "g", "$10^(-3)$")]
+    plain = shapes[0]
+    assert 0 < plain.cap < plain.baseline
+    # the cap line keeps its distance above the baseline even when math grows the box
+    assert len({round(s.baseline - s.cap, 9) for s in shapes}) == 1

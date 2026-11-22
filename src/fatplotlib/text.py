@@ -3,7 +3,8 @@
 one `typst.Compiler` is reused (a fresh one per call costs ~180 ms) and results are cached by
 (markup, size, font). the text box runs from the font's ascender to its descender, so every
 string at one size has the same box unless math makes it taller. the baseline comes from a
-zero-width marker glyph set before the markup, so it is exact even for tall math.
+zero-width marker glyph set before the markup, so it is exact even for tall math. the cap
+height comes from one extra compile per (size, font), so labels can hang from their capitals.
 """
 
 import functools
@@ -45,6 +46,8 @@ class TextShape:
         width (float): box width in pt.
         height (float): box height in pt.
         baseline (float): distance from the top of the box down to the first baseline in pt.
+        cap (float): distance from the top of the box down to the font's cap height in pt,
+            where the tops of capitals and digits sit.
     """
 
     body: str
@@ -52,6 +55,42 @@ class TextShape:
     width: float
     height: float
     baseline: float
+    cap: float
+
+
+def _source(markup: str, size: float, font: str | None, top_edge: str, bottom_edge: str) -> str:
+    """A typst document holding only the markup, on a page that fits it, with no background."""
+    font_rule = "" if font is None else f'#set text(font: "{font}")\n'
+    return (
+        f"{PREAMBLE}\n"
+        "#set page(width: auto, height: auto, margin: 0pt, fill: none)\n"
+        f'#set text(size: {size}pt, top-edge: "{top_edge}", bottom-edge: "{bottom_edge}", fill: rgb("{SENTINEL}"))\n'
+        f"{font_rule}"
+        f"{markup}"
+    )
+
+
+def _compile(source: str) -> str:
+    """The svg of a one-page typst document."""
+    output = _COMPILER.compile(input=source.encode(), format="svg")
+    # one page in, so one svg out
+    assert isinstance(output, bytes)
+    return output.decode()
+
+
+def _size(svg: str) -> tuple[float, float]:
+    """Width and height of a typst svg page in pt."""
+    # typst always writes a viewBox
+    viewbox = _VIEWBOX.search(svg)
+    assert viewbox is not None
+    width, height = map(float, viewbox.groups())
+    return width, height
+
+
+@functools.cache
+def _cap_height(size: float, font: str | None) -> float:
+    """Height of the font's capitals above the baseline in pt: a box from cap height to baseline."""
+    return _size(_compile(_source("x", size, font, "cap-height", "baseline")))[1]
 
 
 @functools.cache
@@ -66,22 +105,12 @@ def typeset(markup: str, size: float, font: str | None = None) -> TextShape:
     Returns:
         TextShape: the glyphs and metrics.
     """
-    font_rule = "" if font is None else f'#set text(font: "{font}")\n'
-    source = (
-        f"{PREAMBLE}\n"
-        "#set page(width: auto, height: auto, margin: 0pt, fill: none)\n"
-        f'#set text(size: {size}pt, top-edge: "ascender", bottom-edge: "descender", fill: rgb("{SENTINEL}"))\n'
-        f"{font_rule}"
-        f'#box(width: 0pt, text(fill: rgb("{MARKER}"))[x]);{markup}'
-    )
-    output = _COMPILER.compile(input=source.encode(), format="svg")
-    # one page in, so one svg out; typst's own output, so the patterns below always match
-    assert isinstance(output, bytes)
-    svg = output.decode()
-
-    viewbox, marker = _VIEWBOX.search(svg), _MARKER_GLYPH.search(svg)
-    assert viewbox is not None and marker is not None
-    width, height = map(float, viewbox.groups())
+    marked = f'#box(width: 0pt, text(fill: rgb("{MARKER}"))[x]);{markup}'
+    svg = _compile(_source(marked, size, font, "ascender", "descender"))
+    width, height = _size(svg)
+    # the marker is always set, so it is always found
+    marker = _MARKER_GLYPH.search(svg)
+    assert marker is not None
     baseline, marker_id = float(marker[1] or 0) + float(marker[2]), marker[3]
     svg = svg[: marker.start()] + svg[marker.end() :]
 
@@ -94,4 +123,4 @@ def typeset(markup: str, size: float, font: str | None = None) -> TextShape:
         for m in _DEF.finditer(svg[end:] if end >= 0 else "")
         if m[2] != marker_id or f"#{marker_id}" in body
     )
-    return TextShape(body, defs, width, height, baseline)
+    return TextShape(body, defs, width, height, baseline, baseline - _cap_height(size, font))
