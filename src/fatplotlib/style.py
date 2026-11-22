@@ -127,6 +127,31 @@ def with_alpha(colour: str, alpha: float) -> str:
     return f"{colour[:7]}{round(alpha * 255):02x}"
 
 
+def to_rgba(colour: str) -> np.ndarray:
+    """The channels of a "#rrggbb" or "#rrggbbaa" colour.
+
+    Args:
+        colour (str): the colour.
+
+    Returns:
+        np.ndarray: red, green, blue and alpha, 0 to 1, shape (4,).
+    """
+    return np.array([int(colour[i : i + 2] or "ff", 16) / 255 for i in (1, 3, 5, 7)])
+
+
+def to_hex(rgba: np.ndarray) -> str:
+    """The css colour of some channels, inverse to `to_rgba`.
+
+    Args:
+        rgba (np.ndarray): red, green, blue and optionally alpha, 0 to 1, shape (3,) or (4,).
+
+    Returns:
+        str: "#rrggbb", or "#rrggbbaa" if alpha is below 1.
+    """
+    rgb = "#" + "".join(f"{round(c * 255):02x}" for c in np.clip(rgba[:3], 0, 1).tolist())
+    return rgb if len(rgba) == 3 or rgba[3] >= 1 else with_alpha(rgb, float(rgba[3]))
+
+
 def srgb_to_oklab(rgb: np.ndarray) -> np.ndarray:
     """Converts srgb colours to oklab.
 
@@ -165,7 +190,7 @@ def mix_colours(a: str, b: str, t: float, space: Space = "oklab") -> str:
     Returns:
         str: the "#rrggbb" colour, or "#rrggbbaa" if the result is not opaque.
     """
-    rgba = np.array([[int(c[i : i + 2] or "ff", 16) / 255 for i in (1, 3, 5, 7)] for c in (a, b)])
+    rgba = np.array([to_rgba(a), to_rgba(b)])
     rgb, alpha = rgba[:, :3], rgba[:, 3:]
     channels = srgb_to_oklab(rgb) if space == "oklab" else rgb
     mixed_alpha = float((1 - t) * alpha[0, 0] + t * alpha[1, 0])
@@ -173,6 +198,5 @@ def mix_colours(a: str, b: str, t: float, space: Space = "oklab") -> str:
         return "#00000000"
     premultiplied = (1 - t) * channels[0] * alpha[0] + t * channels[1] * alpha[1]
     mixed = premultiplied / mixed_alpha
-    out = np.clip(oklab_to_srgb(mixed) if space == "oklab" else mixed, 0, 1)
-    colour = "#" + "".join(f"{round(c * 255):02x}" for c in out.tolist())
-    return colour if mixed_alpha == 1 else with_alpha(colour, mixed_alpha)
+    rgb = oklab_to_srgb(mixed) if space == "oklab" else mixed
+    return to_hex(np.append(rgb, mixed_alpha))

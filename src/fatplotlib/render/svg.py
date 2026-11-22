@@ -5,8 +5,9 @@ locally. `<defs>` (gradients, clip paths, typst glyphs) are collected once per d
 content hash or typst's own glyph hash, so ids are stable across runs and duplicates collapse.
 
 without a theme every token becomes a css custom property (`fill:var(--fg)`), which the preview
-defines per theme, and a `Mix` becomes css `color-mix` over them. with a theme the scene is
-resolved to literal values first, for export.
+defines per theme, a `Mix` becomes css `color-mix` over them, and a `Themed` node draws every
+theme's child under a `fpl-theme-<name>` class. with a theme the scene is resolved to literal
+values first, for export.
 """
 
 import hashlib
@@ -29,8 +30,9 @@ from fatplotlib.scene import (
     Rect,
     Shape,
     Text,
+    Themed,
 )
-from fatplotlib.style import Mix, Paint, RadialGradient, Stroke, Token, mix_colours
+from fatplotlib.style import Mix, Paint, RadialGradient, Stroke, Token
 from fatplotlib.theme import Theme
 
 
@@ -69,10 +71,11 @@ def _resolved(node: Node, theme: Theme) -> Node:
         if isinstance(value, RadialGradient):
             stops = tuple(replace(stop, colour=theme.colour(stop.colour)) for stop in value.stops)
             return replace(value, stops=stops)
-        if isinstance(value, Mix):
-            return mix_colours(theme.colour(value.a), theme.colour(value.b), value.t, value.space)
         return value if value is None else theme.colour(value)
 
+    if isinstance(node, Themed):
+        # the child stands in for the wrapper, which carries nothing of its own once resolved
+        return _resolved(Group([node.children[theme.name]], id=node.id, class_=node.class_, alpha=node.alpha), theme)
     changes: dict[str, object] = {"alpha": theme.number(node.alpha)}
     match node:
         case Group():
@@ -240,6 +243,10 @@ def _node(node: Node, defs: dict[str, str]) -> str:  # noqa: C901, PLR0911, PLR0
             if node.clip is not None:
                 pairs.append(("clip-path", f"url(#{_clip(node.clip, defs)})"))
             return f"<g{_attrs(pairs, style)}>{''.join(_node(child, defs) for child in node.children)}</g>"
+        case Themed():
+            pairs, style = _common(node)
+            children = "".join(f'<g class="fpl-theme-{name}">{_node(child, defs)}</g>' for name, child in node.children.items())
+            return f"<g{_attrs(pairs, style)}>{children}</g>"
         case Path():
             return f"<path{_shape_attrs(node, [('d', _path_data(node))], defs)}/>"
         case Polylines():

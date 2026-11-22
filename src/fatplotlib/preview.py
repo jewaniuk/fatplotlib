@@ -3,7 +3,8 @@
 one long-lived process watches the script's directory, re-runs the script on every saved `.py`
 and pushes the new svg to the page over server-sent events (one open http request the server
 writes to). the svg keeps tokens as css variables, and each pane's theme class defines them, so
-light and dark come from one render. on an error the page shows the traceback and keeps the last
+light and dark come from one render; drawing that differs by more than tokens (`Themed`) is in
+the svg once per theme, and each pane hides the others. on an error the page shows the traceback and keeps the last
 good svg.
 
 the preview always draws panel labels (class `fpl-label`) and the page hides them when the target
@@ -26,7 +27,7 @@ import watchfiles
 from fatplotlib import script
 from fatplotlib.layout import Figure, Target
 from fatplotlib.render.svg import render
-from fatplotlib.theme import DARK, LIGHT
+from fatplotlib.theme import DARK, LIGHT, Theme
 
 _PAGE = """<!doctype html>
 <html><head><meta charset="utf-8"><title>fpl %(name)s</title><style>
@@ -136,7 +137,7 @@ def serve(path: Path, port: int = 8765, open_browser: bool = True) -> None:
         open_browser (bool): open the page in the default browser.
     """
     state = _State()
-    page = (_PAGE % {"name": path.name, "themes": LIGHT.css(".light") + "\n" + DARK.css(".dark")}).encode()
+    page = (_PAGE % {"name": path.name, "themes": _themes_css((LIGHT, DARK))}).encode()
     server = ThreadingHTTPServer(("127.0.0.1", port), _handler(page, state, path))
     server.daemon_threads = True
     threading.Thread(target=server.serve_forever, daemon=True).start()
@@ -147,6 +148,13 @@ def serve(path: Path, port: int = 8765, open_browser: bool = True) -> None:
     _build(path, state)
     for _ in watchfiles.watch(path.resolve().parent, watch_filter=watchfiles.PythonFilter()):
         _build(path, state)
+
+
+def _themes_css(themes: tuple[Theme, ...]) -> str:
+    """Each theme's tokens on its pane class, and the rule hiding other themes' `Themed` children."""
+    tokens = "\n".join(theme.css(f".{theme.name}") for theme in themes)
+    hidden = ",".join(f".{a.name} .fpl-theme-{b.name}" for a in themes for b in themes if a is not b)
+    return f"{tokens}\n{hidden}{{display:none}}"
 
 
 def _build(path: Path, state: _State, next_target: bool = False) -> None:

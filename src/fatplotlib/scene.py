@@ -277,6 +277,27 @@ class Group(Node):
         return box.transformed(self.transform)
 
 
+@dataclass(slots=True)
+class Themed(Node):
+    """A node per theme, for drawing that differs by theme beyond token values (a colormap
+    chosen per theme). export keeps the child for its theme; the preview draws every child with
+    class `fpl-theme-<name>` and hides those of the other themes.
+
+    Attributes:
+        children (dict[str, Node]): theme name -> the node drawn in that theme.
+    """
+
+    children: dict[str, Node] = field(default_factory=dict)
+
+    def bbox(self) -> BBox | None:
+        """The union of the children's boxes, so layout does not move between themes.
+
+        Returns:
+            BBox | None: the box, None if nothing is drawn.
+        """
+        return Group(list(self.children.values())).bbox()
+
+
 @dataclass(frozen=True, slots=True)
 class PathPoint:
     """A position along a path.

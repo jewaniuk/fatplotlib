@@ -8,10 +8,9 @@ left (and on top for a twin axis). data drawn with `line`, `lines`, `markers`, `
 clipped to the rectangle, `text`, unclipped markers and insets are not. `outer()` is the box the
 decorations and notes (text, unclipped markers) reach, which layout measures.
 
-ticks follow a nice-number rule: the smallest step of 1, 2, 2.5 or 5 x 10^k (linear), or the
-smallest decade stride (log), that leaves at most `max_gaps` gaps between labelled ticks.
-`max_gaps` comes from the axis length and label size, as in matplotlib. odd ranges (under a
-decade on a log axis, big values with tiny spans) take explicit `ticks=`.
+ticks follow `Scale`'s nice-number rule, with `max_gaps` from the axis length and label size, as
+in matplotlib. odd ranges (under a decade on a log axis, big values with tiny spans) take explicit
+`ticks=`.
 """
 
 import math
@@ -22,143 +21,16 @@ from typing import Literal
 import numpy as np
 from numpy.typing import ArrayLike
 
+from fatplotlib.colormap import DEFAULT, Colormap, Norm
 from fatplotlib.panel import Panel
-from fatplotlib.scene import BBox, Command, Group, Markers, MarkerShape, Node, Path, Polylines, Rect, Text
+from fatplotlib.scale import EPS, Scale
+from fatplotlib.scene import BBox, Command, Group, Markers, MarkerShape, Node, Path, Polylines, Rect, Text, Themed
 from fatplotlib.style import Paint, Stroke, Token
 from fatplotlib.transform import Affine
 from fatplotlib.units import length
 
 type Coords = Literal["data", "axes"]
 """what a position means: data values, or fractions of the axes rectangle (0 to 1)."""
-
-# nice steps for linear ticks, as multiples of a power of ten
-_STEPS = (1.0, 2.0, 2.5, 5.0, 10.0)
-# slack for comparing floats that should be whole or equal
-_EPS = 1e-9
-
-
-class Scale:
-    """Maps data values to fractions of an axis, 0 at the start of `lim` and 1 at its end.
-
-    Attributes:
-        kind (Literal["linear", "log"]): how values are spaced.
-        lim (tuple[float, float]): the data values at the start and end of the axis; start >
-            end reverses the axis. a zero-width range is widened (linear by 5 %, log by a
-            decade each way).
-    """
-
-    def __init__(self, kind: Literal["linear", "log"], lim: tuple[float, float]) -> None:
-        """Sets up the scale.
-
-        Args:
-            kind (Literal["linear", "log"]): how values are spaced.
-            lim (tuple[float, float]): the data values at the start and end of the axis.
-
-        Raises:
-            ValueError: a log scale has a limit <= 0.
-        """
-        lo, hi = map(float, lim)
-        if kind == "log" and (lo <= 0 or hi <= 0):
-            raise ValueError(f"log scale limits must be positive, got {lim}")
-        if lo == hi:
-            lo, hi = (lo / 10, hi * 10) if kind == "log" else (lo - (0.05 * abs(lo) or 0.05), hi + (0.05 * abs(hi) or 0.05))
-        self.kind: Literal["linear", "log"] = kind
-        self.lim = (lo, hi)
-        self._start, self._end = self._space(np.array(self.lim))
-
-    def _space(self, values: np.ndarray) -> np.ndarray:
-        """Values in the space where the scale is linear; log of values <= 0 gives nan or -inf."""
-        if self.kind == "linear":
-            return values
-        with np.errstate(divide="ignore", invalid="ignore"):
-            return np.log10(values)
-
-    def fraction(self, values: ArrayLike) -> np.ndarray:
-        """Where values sit along the axis.
-
-        Args:
-            values (ArrayLike): data values.
-
-        Returns:
-            np.ndarray: fractions, 0 at the start of `lim` and 1 at its end; non-finite for
-                values the scale cannot map (log of values <= 0).
-        """
-        return (self._space(np.asarray(values, dtype=float)) - self._start) / (self._end - self._start)
-
-    def ticks(self, max_gaps: int) -> list[float]:
-        """Major tick values inside `lim` by the nice-number rule.
-
-        Args:
-            max_gaps (int): the most gaps allowed between the first and last tick.
-
-        Returns:
-            list[float]: the values, ascending.
-        """
-        max_gaps = max(max_gaps, 1)
-        lo, hi = sorted(self._space(np.array(self.lim)).tolist())
-        if self.kind == "log":
-            first, last = math.ceil(lo - _EPS), math.floor(hi + _EPS)
-            stride = 1
-            while (last - first) // stride > max_gaps:
-                stride += 1
-            return [10.0**k for k in range(first, last + 1, stride)]
-        magnitude = 10 ** math.floor(math.log10((hi - lo) / max_gaps))
-        # 20 x magnitude is over twice the even split, so it always fits
-        step = next(m * magnitude for m in (*_STEPS, 20.0) if len(_multiples(lo, hi, m * magnitude)) - 1 <= max_gaps)
-        # round away float noise (0.1 * 3 = 0.30000000000000004) a digit below the step
-        digits = max(0, 1 - math.floor(math.log10(step)))
-        return [round(k * step, digits) + 0.0 for k in _multiples(lo, hi, step)]
-
-    def minor_ticks(self, majors: Sequence[float]) -> list[float]:
-        """Minor tick values inside `lim` that fit between the majors.
-
-        Linear majors are split in 5 (steps of 1 or 5 x 10^k) or 4 (2 or 2.5 x 10^k). Log majors
-        a decade apart get 2 to 9 x each decade; majors further apart get the decades skipped.
-
-        Args:
-            majors (Sequence[float]): the major tick values, ascending and evenly spaced.
-
-        Returns:
-            list[float]: the values, ascending, with the majors left out.
-        """
-        lo, hi = sorted(self.lim)
-        if self.kind == "log":
-            exponents = [math.log10(t) for t in majors]
-            if len(majors) > 1 and all(abs(e - round(e)) < _EPS for e in exponents) and exponents[1] - exponents[0] > 1.5:
-                decades = range(math.ceil(math.log10(lo) - _EPS), math.floor(math.log10(hi) + _EPS) + 1)
-                values = [10.0**k for k in decades if k not in {round(e) for e in exponents}]
-            else:
-                decades = range(math.floor(math.log10(lo)), math.ceil(math.log10(hi)) + 1)
-                # parse "7e-1" rather than multiply, which gives 0.7000000000000001
-                values = [float(f"{s}e{k}") for k in decades for s in range(2, 10)]
-            return [v for v in values if lo * (1 - _EPS) <= v <= hi * (1 + _EPS)]
-        if len(majors) < 2:
-            return []
-        step = majors[1] - majors[0]
-        mantissa = step / 10 ** math.floor(math.log10(step))
-        sub = step / (4 if round(mantissa, 6) in (2.0, 2.5) else 5)
-        values = [k * sub for k in _multiples(lo, hi, sub)]
-        return [v for v in values if all(abs(v - m) > _EPS * step for m in majors)]
-
-    def labels(self, ticks: Sequence[float]) -> list[str]:
-        """Typst markup for tick values: `$10^(k)$` for decades on a log scale, else plain numbers
-        with as few decimals as every value needs.
-
-        Args:
-            ticks (Sequence[float]): the values.
-
-        Returns:
-            list[str]: one label per value.
-        """
-        if self.kind == "log":
-            exponents = [math.log10(t) for t in ticks]
-            if all(abs(e - round(e)) < _EPS for e in exponents):
-                return [f"$10^({round(e)})$" for e in exponents]
-        decimals = next(
-            (d for d in range(10) if all(abs(round(t, d) - t) <= _EPS * max(1.0, abs(t)) for t in ticks)), 10
-        )
-        return [f"${round(t, decimals) + 0.0:.{decimals}f}$" for t in ticks]
-
 
 @dataclass(slots=True)
 class Axis:
@@ -414,29 +286,70 @@ class Axes:
         marker: Marker = Marker(),
         coords: Coords = "data",
         *,
+        values: ArrayLike | None = None,
+        cmap: Colormap = DEFAULT,
+        norm: Norm | None = None,
         clip: bool = True,
         **node: object,
     ) -> None:
         """Draws a marker at each point, skipping points that cannot be mapped.
+
+        With `values` the fill comes from the colormap instead of the marker: points are grouped
+        into one `Markers` per lut colour, so markers of one colour draw together and overlaps
+        between colours follow lut order, not point order.
 
         Args:
             x (ArrayLike): x positions.
             y (ArrayLike): y positions.
             marker (Marker): the marker style.
             coords (Coords): what the positions mean.
+            values (ArrayLike | None): a value per point, coloured through `cmap`.
+            cmap (Colormap): the colormap for `values`.
+            norm (Norm | None): maps `values` to the colormap, linear over their finite range if None.
             clip (bool): clip to the rectangle like data; False draws them as notes, which count
                 toward `outer()` so layout makes room (hand-made legends, points on spines).
-            **node (object): other `Markers` fields such as id or alpha.
+            **node (object): other node fields such as id or alpha, on the `Markers`, or on the
+                group around them with `values`.
         """
-        (self._data if clip else self._notes).append(lambda: self._markers(x, y, marker, coords, node))
+        layer = self._data if clip else self._notes
+        layer.append(lambda: self._markers(x, y, marker, coords, values=values, cmap=cmap, norm=norm, node=node))
 
-    def _markers(self, x: ArrayLike, y: ArrayLike, marker: Marker, coords: Coords, node: dict[str, object]) -> Markers:
-        """The markers for `markers`, in pt."""
-        px, py = self.to_pt(x, y, coords)
+    def _markers(
+        self,
+        x: ArrayLike,
+        y: ArrayLike,
+        marker: Marker,
+        coords: Coords,
+        *,
+        values: ArrayLike | None,
+        cmap: Colormap,
+        norm: Norm | None,
+        node: dict[str, object],
+    ) -> Node:
+        """The markers for `markers`, in pt: one `Markers`, or a group of them per lut colour,
+        split by theme when the colormap is chosen per theme."""
+        px, py = (np.ravel(v) for v in self.to_pt(x, y, coords))
         size = self._size(marker.size)
-        return Markers(
-            np.ravel(px), np.ravel(py), marker.shape, size, fill=marker.fill, stroke=marker.stroke, **node  # pyright: ignore[reportArgumentType]
-        )
+        if values is None:
+            return Markers(px, py, marker.shape, size, fill=marker.fill, stroke=marker.stroke, **node)  # pyright: ignore[reportArgumentType]
+        v = np.ravel(np.asarray(values, dtype=float))
+        norm = norm or Norm("linear", (float(np.nanmin(v)), float(np.nanmax(v))))
+        fractions = norm.fraction(v)
+
+        def grouped(cmap: Colormap) -> list[Node]:
+            """One `Markers` per lut index present, bad points left out unless the map colours them."""
+            index = cmap.index(fractions)
+            groups: list[Node] = []
+            for i in np.unique(index).tolist():
+                paint = cmap.paint(i)
+                if paint is not None:
+                    chosen = index == i
+                    groups.append(Markers(px[chosen], py[chosen], marker.shape, size, fill=paint, stroke=marker.stroke))
+            return groups
+
+        if cmap.themes:
+            return Themed({name: Group(grouped(m)) for name, m in cmap.themes.items()}, **node)  # pyright: ignore[reportArgumentType]
+        return Group(grouped(cmap), **node)  # pyright: ignore[reportArgumentType]
 
     def _line(self, x: ArrayLike, y: ArrayLike, stroke: Stroke, coords: Coords, node: dict[str, object]) -> Path:
         """The polyline for `line`, in pt."""
@@ -707,15 +620,10 @@ class Axes:
         r = self._rect()
         start, span = (r.x0, r.width) if direction == "x" else (r.y0, r.height)
         fractions = scale.fraction(majors).tolist()
-        return [(start + f * span, m) for f, m in zip(fractions, labels) if -_EPS <= f <= 1 + _EPS]
-
-
-def _multiples(lo: float, hi: float, step: float) -> range:
-    """The whole numbers k with k * step inside [lo, hi], allowing for float error."""
-    return range(math.ceil(lo / step - _EPS), math.floor(hi / step + _EPS) + 1)
+        return [(start + f * span, m) for f, m in zip(fractions, labels) if -EPS <= f <= 1 + EPS]
 
 
 def _visible(fractions: np.ndarray) -> list[float]:
     """The fractions that land on the axis."""
-    return [f for f in fractions.tolist() if -_EPS <= f <= 1 + _EPS]
+    return [f for f in fractions.tolist() if -EPS <= f <= 1 + EPS]
 

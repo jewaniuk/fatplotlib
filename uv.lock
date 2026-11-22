@@ -16,6 +16,18 @@ wheels = [
 ]
 
 [[package]]
+name = "cmap"
+version = "0.8.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/90/ae/38250e7348ca75bfdccc43dec77730ca4cfcb7f2c9db30c5c03215c2d80d/cmap-0.8.0.tar.gz", hash = "sha256:ed69913f26c3227fc212f3200213f64c0e2fad010e0fd6835280ca4b8b617832", size = 961841, upload-time = "2026-10-20T11:28:42.441Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/74/58/02317db56c32b78bd44589a76a434b4b97bf6bb1c222bce9afda259ec18c/cmap-0.8.0-py3-none-any.whl", hash = "sha256:570944c1738c2f84b1a32d2e9ca1e3a180322f1b04debe3b53db3c46797fe723", size = 1002937, upload-time = "2026-10-20T11:28:40.414Z" },
+]
+
+[[package]]
 name = "colorama"
 version = "0.4.6"
 source = { registry = "https://pypi.org/simple" }
@@ -29,6 +41,7 @@ name = "fatplotlib"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "cmap" },
     { name = "kiwisolver" },
     { name = "numpy" },
     { name = "resvg-py" },
@@ -43,6 +56,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "cmap", specifier = ">=0.8.0" },
     { name = "kiwisolver", specifier = ">=1.5.1" },
     { name = "numpy", specifier = ">=2.5.5" },
     { name = "resvg-py", specifier = ">=0.5.0" },

@@ -2,8 +2,9 @@
 
 import pytest
 
+from fatplotlib.preview import _themes_css
 from fatplotlib.render.svg import render
-from fatplotlib.scene import Group, Rect, Text
+from fatplotlib.scene import Group, Rect, Text, Themed
 from fatplotlib.style import Mix, Stroke, Token, mix_colours
 from fatplotlib.theme import DARK, LIGHT
 
@@ -65,3 +66,14 @@ def test_mix_toward_a_token_follows_the_theme():
     assert "color-mix(in oklab, #e89145, var(--bg) 60%)" in render(faint, 1, 1)
     stroke = Rect(0, 0, 1, 1, stroke=Stroke(Mix(Token("fg"), "#ffffff", 0.25, "srgb")))
     assert "stroke:color-mix(in srgb, var(--fg), #ffffff 25%)" in render(stroke, 1, 1)
+
+
+def test_themed_keeps_one_child_in_export_and_all_in_the_preview():
+    themed = Themed({"light": Rect(0, 0, 1, 1, fill="#000000"), "dark": Rect(0, 0, 1, 1, fill="#ffffff")})
+    light, dark = (render(themed, 1, 1, theme) for theme in (LIGHT, DARK))
+    assert "#000000" in light and "#ffffff" not in light
+    assert "#ffffff" in dark and "#000000" not in dark
+    preview = render(themed, 1, 1)
+    assert 'class="fpl-theme-light"' in preview and 'class="fpl-theme-dark"' in preview
+    css = _themes_css((LIGHT, DARK))
+    assert ".light .fpl-theme-dark,.dark .fpl-theme-light{display:none}" in css

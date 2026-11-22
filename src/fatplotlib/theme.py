@@ -9,7 +9,7 @@ class; export swaps in each theme's literal values. token names are python ident
 from dataclasses import dataclass, field
 from types import MappingProxyType
 
-from fatplotlib.style import Token
+from fatplotlib.style import Mix, Token, mix_colours
 
 type Value = str | float
 
@@ -39,11 +39,11 @@ class Theme:
         """
         return Theme(name or self.name, MappingProxyType({**self.tokens, **tokens}))
 
-    def colour(self, value: str | Token) -> str:
-        """The colour behind a token, or the colour itself.
+    def colour(self, value: str | Token | Mix) -> str:
+        """The colour behind a token or a mix, or the colour itself.
 
         Args:
-            value (str | Token): a colour token or a literal colour.
+            value (str | Token | Mix): a colour token, a mix or a literal colour.
 
         Returns:
             str: the colour.
@@ -52,6 +52,8 @@ class Theme:
             KeyError: the theme has no such token.
             TypeError: the token holds a number.
         """
+        if isinstance(value, Mix):
+            return mix_colours(self.colour(value.a), self.colour(value.b), value.t, value.space)
         return self._resolve(value, str)
 
     def number(self, value: float | Token) -> float:
