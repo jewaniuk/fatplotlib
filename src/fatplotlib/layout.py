@@ -11,8 +11,9 @@ typst text. rows and columns stack outer boxes with a gap, `ratios` split the in
 the stack, and `share` aligns the inner edges across it. the number of ticks depends on the
 rectangle and the margins on the ticks, so the solve repeats until the margins settle.
 
-panel labels never take space. each sits in the top-left corner of its panel's outer box, its
-left edge on the box's left and its cap height on the box's top. then labels across a row share
+panel labels never take space. each sits in the top-left corner of its item's outer box (an
+axes's decorations, a panel's drawn content), its left edge on the box's left and its cap height
+on the box's top. then labels across a row share
 the highest top and labels down a column the leftmost left edge.
 """
 
@@ -187,9 +188,10 @@ class Figure:
         height = length(self.height, em)
         pad = length(self.pad, em)
         _solve(self.root, BBox(pad, pad, width - pad, height - pad), em)
-        root = Group([leaf.group() for leaf in _leaves(self.root)])
+        groups = {id(leaf): leaf.group() for leaf in _leaves(self.root)}
+        root = Group(list(groups.values()))
         if target.labels:
-            root.add(*_labels(self.root, root, em))
+            root.add(*_labels(self.root, groups, em))
         return root, width, height
 
 
@@ -310,10 +312,10 @@ def _constrain(root: Item, area: BBox, em: float, margins: dict[int, Margins]) -
     }
 
 
-def _labels(root: Item, scene: Group, em: float) -> list[Text]:
+def _labels(root: Item, groups: dict[int, Group], em: float) -> list[Text]:
     """Panel labels for the placed leaves, lettered in reading order and aligned."""
     labelled = [leaf for leaf in _leaves(root) if leaf.label is not False]
-    outers = {id(leaf): leaf.outer() for leaf in labelled}
+    outers = {id(leaf): _outer(leaf, groups[id(leaf)]) for leaf in labelled}
     # reading order: rows top to bottom (a leaf joins a row if its top is above the row's first
     # leaf's middle), then left to right
     order: list[Leaf] = []
@@ -334,8 +336,18 @@ def _labels(root: Item, scene: Group, em: float) -> list[Text]:
         letter = leaf.label if isinstance(leaf.label, str) else chr(ord("a") + i)
         x, y = corners[id(leaf)]
         texts.append(Text(f"*{letter}*", x, y, em, "start", "cap", class_="fpl-label"))
-    _check_overlaps(texts, scene, labelled)
+    _check_overlaps(texts, Group(list(groups.values())), labelled)
     return texts
+
+
+def _outer(leaf: Leaf, group: Group) -> BBox:
+    """The box a leaf's label anchors to: an axes's outer box, or the bbox of a panel's drawn
+    content, so a schematic's label sits on its ink rather than on the fitted box."""
+    if isinstance(leaf, Panel):
+        drawn = group.bbox()
+        if drawn is not None:
+            return drawn
+    return leaf.outer()
 
 
 def _align(item: Item, corners: dict[int, list[float]]) -> None:

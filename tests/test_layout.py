@@ -93,3 +93,16 @@ def test_labels_skip_override_and_switch_off():
     fig.layout(Row(first, second, third))
     assert [t.markup for t in labels(fig.scene(PAPER)[0])] == ["*z*", "*b*"]
     assert labels(fig.scene(PAPER.with_(labels=False))[0]) == []
+
+
+def test_schematic_label_anchors_on_drawn_content():
+    def draw(f: Frame) -> list[Rect]:
+        return [Rect(*f.pt(20, 10), f.length(50), f.length(20))]
+
+    panel = Panel(2, draw)
+    fig = Figure("4in", height="2in", pad=0)
+    fig.layout(panel)
+    (a,) = labels(fig.scene(PAPER)[0])
+    drawn = panel.group().bbox()
+    assert drawn is not None and drawn != panel.outer()
+    assert (a.x, a.y) == (drawn.x0, drawn.y1)

@@ -124,7 +124,7 @@ class Panel:
         return Group(list(self.draw(self.frame())))
 
     def outer(self) -> BBox:
-        """The fitted box, which panel labels anchor to.
+        """The fitted box; panel labels anchor to the drawn content inside it instead.
 
         Returns:
             BBox: the box in pt.
