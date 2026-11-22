@@ -23,7 +23,8 @@ SENTINEL = "#010203"
 # fill for the baseline marker glyph, removed from the output once measured
 MARKER = "#030201"
 
-_COMPILER = typst.Compiler(font_paths=[str(FONTS)], ignore_system_fonts=True)
+# the one compiler, shared with pdf export
+COMPILER = typst.Compiler(font_paths=[str(FONTS)], ignore_system_fonts=True)
 _VIEWBOX = re.compile(r'viewBox="0 0 ([\d.]+) ([\d.]+)"')
 # the marker box: an optional translate (when tall math moves the line down), then the glyph
 _MARKER_GLYPH = re.compile(
@@ -72,7 +73,7 @@ def _source(markup: str, size: float, font: str | None, top_edge: str, bottom_ed
 
 def _compile(source: str) -> str:
     """The svg of a one-page typst document."""
-    output = _COMPILER.compile(input=source.encode(), format="svg")
+    output = COMPILER.compile(input=source.encode(), format="svg")
     # one page in, so one svg out
     assert isinstance(output, bytes)
     return output.decode()
