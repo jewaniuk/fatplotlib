@@ -30,6 +30,7 @@ def save(
     fig: Figure,
     path: Path,
     target: Target | None = None,
+    *,
     themes: str | Theme = "both",
     dpi: float = 300,
     background: str | Token | None = None,
@@ -59,11 +60,11 @@ def save(
     else:
         outputs = [({"light": LIGHT, "dark": DARK}[themes] if isinstance(themes, str) else themes, path)]
     for theme, out in outputs:
-        out.write_bytes(export(root, width, height, theme, out.suffix.removeprefix("."), dpi))
+        out.write_bytes(export(root, width, height, theme, out.suffix.removeprefix("."), dpi=dpi))
     return [out for _, out in outputs]
 
 
-def export(root: Node, width: float, height: float, theme: Theme, format: str, dpi: float = 300) -> bytes:
+def export(root: Node, width: float, height: float, theme: Theme, format: str, *, dpi: float = 300) -> bytes:
     """Renders a scene to the bytes of one file.
 
     Args:

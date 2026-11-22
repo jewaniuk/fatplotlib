@@ -76,7 +76,7 @@ class PathBuilder:
         self.current = (x, y)
         return self
 
-    def cubic_to(self, c1x: float, c1y: float, c2x: float, c2y: float, x: float, y: float) -> PathBuilder:
+    def cubic_to(self, c1x: float, c1y: float, c2x: float, c2y: float, x: float, y: float) -> PathBuilder:  # noqa: PLR0917 - svg's argument order
         """Draws a cubic bezier.
 
         Args:
@@ -139,7 +139,7 @@ class PathBuilder:
         centre = (x - r * math.cos(start), y - r * math.sin(start))
         return self._arc(centre, r, r, 0.0, start, math.radians(theta_out - theta_in))
 
-    def elliptical_arc_to(
+    def elliptical_arc_to(  # noqa: PLR0917 - svg's argument order
         self, rx: float | str, ry: float | str, rotation: float, large: bool, sweep: bool, x: float, y: float
     ) -> PathBuilder:
         """Draws an elliptical arc to a point, with the svg `A` command's meaning.
@@ -241,7 +241,7 @@ class PathBuilder:
         self._arc(centre, r, r, 0.0, math.atan2(t1[1] - centre[1], t1[0] - centre[0]), turn)
         self.current = (b[0] + reach * v[0], b[1] + reach * v[1])
 
-    def _arc(self, centre: tuple[float, float], rx: float, ry: float, phi: float, start: float, span: float) -> PathBuilder:
+    def _arc(self, centre: tuple[float, float], rx: float, ry: float, phi: float, start: float, span: float) -> PathBuilder:  # noqa: PLR0917 - svg's argument order
         """Draws an elliptical arc from its centre form as cubics of at most 90° each.
 
         the pen must already sit at the arc's start; `phi` rotates the ellipse, and `start` and
@@ -287,7 +287,7 @@ class PathBuilder:
         """
         return self.line_to(self.current[0] + dx, self.current[1] + dy)
 
-    def rel_cubic_to(
+    def rel_cubic_to(  # noqa: PLR0917 - svg's argument order
         self, c1dx: float, c1dy: float, c2dx: float, c2dy: float, dx: float, dy: float
     ) -> PathBuilder:
         """Draws a cubic bezier with every point relative to the pen at its start.
@@ -321,7 +321,7 @@ class PathBuilder:
         x, y = self.current
         return self.quad_to(x + cdx, y + cdy, x + dx, y + dy)
 
-    def rel_elliptical_arc_to(
+    def rel_elliptical_arc_to(  # noqa: PLR0917 - svg's argument order
         self, rx: float | str, ry: float | str, rotation: float, large: bool, sweep: bool, dx: float, dy: float
     ) -> PathBuilder:
         """Draws an elliptical arc to a point relative to the pen, as `elliptical_arc_to`.

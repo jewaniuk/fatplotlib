@@ -414,6 +414,7 @@ class Axes:
         start: tuple[float, float],
         end: tuple[float, float],
         stroke: Stroke,
+        *,
         coords: Coords = "data",
         head: tuple[float, float] = (4.0, 3.0),
         both: bool = False,
@@ -428,13 +429,14 @@ class Axes:
             head (tuple[float, float]): head length and width in pt.
             both (bool): whether the tail gets a head too.
         """
-        self._data.append(lambda: self._arrow(start, end, stroke, coords, head, both))
+        self._data.append(lambda: self._arrow(start, end, stroke, coords=coords, head=head, both=both))
 
     def _arrow(
         self,
         start: tuple[float, float],
         end: tuple[float, float],
         stroke: Stroke,
+        *,
         coords: Coords,
         head: tuple[float, float],
         both: bool,

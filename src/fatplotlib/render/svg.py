@@ -177,7 +177,7 @@ def _polylines_data(node: Polylines) -> str:
     return " ".join(pairs)
 
 
-def _node(node: Node, defs: dict[str, str]) -> str:
+def _node(node: Node, defs: dict[str, str]) -> str:  # noqa: C901, PLR0911 - one branch per node type
     """Svg text for one node and its children, adding what it references to `defs`."""
     match node:
         case Group():
