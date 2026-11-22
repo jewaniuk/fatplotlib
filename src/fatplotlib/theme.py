@@ -104,6 +104,8 @@ LIGHT = Theme(
             "accent_orange": "#e89145",
             "accent_lavender": "#c5aff0",
             "accent_teal": "#6ce4bd",
+            "accent_teal_glow": "#e2faf2",
+            "hair": 0.25,
             "thin": 0.4,
             "fine": 0.6,
             "normal": 0.8,

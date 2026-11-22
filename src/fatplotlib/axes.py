@@ -1,10 +1,12 @@
-"""axes: scales, ticks, spines and data drawing on a fixed rectangle.
+"""axes: scales, ticks, spines and data drawing on a rectangle that layout places.
 
-an `Axes` maps data to pt inside its rectangle (`inner`) and draws decorations around it:
-spines on all four sides, inward major and minor ticks on every side, typst tick labels and
-axis labels on the bottom and left (and on top for a twin axis). data drawn with `line` and
-`arrow` is clipped to the rectangle, `text` is not. `group()` returns everything as plain
-scene nodes and `outer()` the box the decorations reach, which layout needs.
+an `Axes` is built before it has a rectangle: `line`, `arrow`, `text`, `draw` and `inset` record
+what to draw, and `group()` builds the scene nodes once `place` has given the rectangle (`inner`)
+and the font size that em lengths scale. around the rectangle it draws spines on all four sides,
+inward major and minor ticks on every side, typst tick labels and axis labels on the bottom and
+left (and on top for a twin axis). data drawn with `line`, `arrow` and `draw` is clipped to the
+rectangle, `text` and insets are not. `outer()` is the box the decorations reach, which layout
+measures.
 
 ticks follow a nice-number rule: the smallest step of 1, 2, 2.5 or 5 x 10^k (linear), or the
 smallest decade stride (log), that leaves at most `max_gaps` gaps between labelled ticks.
@@ -13,17 +15,18 @@ decade on a log axis, big values with tiny spans) take explicit `ticks=`.
 """
 
 import math
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Literal
 
 import numpy as np
 from numpy.typing import ArrayLike
 
+from fatplotlib.panel import Panel
 from fatplotlib.scene import BBox, Command, Group, Node, Path, Rect, Text
 from fatplotlib.style import Paint, Stroke, Token
 from fatplotlib.transform import Affine
-from fatplotlib.units import TEX_PT
+from fatplotlib.units import length
 
 type Coords = Literal["data", "axes"]
 """what a position means: data values, or fractions of the axes rectangle (0 to 1)."""
@@ -209,12 +212,13 @@ class Axis:
 
 @dataclass(frozen=True, slots=True)
 class AxesStyle:
-    """Sizes and paints of axes decorations. lengths follow matplotlib's defaults and text the
-    8 and 9 latex pt of the reference figures.
+    """Sizes and paints of axes decorations. lengths follow matplotlib's defaults in pt; text
+    sizes are relative to the target's base size, 8 / 9 em for tick labels as in the 8 and 9
+    latex pt of the reference figures.
 
     Attributes:
-        tick_label_size (float): tick label font size in pt.
-        label_size (float): axis label and `text` font size in pt.
+        tick_label_size (float | str): tick label font size, pt or a length such as "0.9em".
+        label_size (float | str): axis label and `text` font size, pt or a length.
         major (float): major tick length in pt.
         minor (float): minor tick length in pt.
         tick_pad (float): gap from the spine to the tick labels' ink (cap height below, baseline above) in pt.
@@ -225,8 +229,8 @@ class AxesStyle:
         paint (Paint): colour of spines, ticks and text.
     """
 
-    tick_label_size: float = 8 * TEX_PT
-    label_size: float = 9 * TEX_PT
+    tick_label_size: float | str = f"{8 / 9}em"
+    label_size: float | str = "1em"
     major: float = 3.5
     minor: float = 2.0
     tick_pad: float = 3.5
@@ -238,24 +242,24 @@ class AxesStyle:
 
 
 class Axes:
-    """A plot on a fixed rectangle: data drawing plus spines, ticks and labels.
+    """A plot: data drawing plus spines, ticks and labels, built once layout places it.
 
     The right side mirrors the left axis's ticks and the top mirrors the bottom's, unless
     `twin_x` gives the top its own axis.
 
     Attributes:
-        inner (BBox): the plot rectangle in pt.
         x (Axis): the bottom axis.
         y (Axis): the left axis.
         top (Axis | None): the twin axis on top, None if the top mirrors `x`.
         style (AxesStyle): decoration sizes and paints.
-        data (Group): nodes drawn by `line` and `arrow`, clipped to `inner`.
-        notes (Group): nodes drawn by `text`, above the spines and not clipped.
+        label (str | bool | None): the panel label: None letters it automatically, False skips
+            it, a string replaces the letter.
+        inner (BBox | None): the plot rectangle in pt, None until placed.
+        em (float | None): the font size in pt that em lengths scale, None until placed.
     """
 
     def __init__(
         self,
-        inner: BBox,
         *,
         xlim: tuple[float, float],
         ylim: tuple[float, float],
@@ -270,11 +274,11 @@ class Axes:
         xlabel: str | None = None,
         ylabel: str | None = None,
         style: AxesStyle = AxesStyle(),
+        label: str | bool | None = None,
     ) -> None:
         """Sets up the axes; see `Axis` for what each tick and label argument means.
 
         Args:
-            inner (BBox): the plot rectangle in pt.
             xlim (tuple[float, float]): bottom axis start and end.
             ylim (tuple[float, float]): left axis start and end.
             xscale (Literal["linear", "log"]): bottom axis spacing.
@@ -288,14 +292,29 @@ class Axes:
             xlabel (str | None): bottom axis label.
             ylabel (str | None): left axis label.
             style (AxesStyle): decoration sizes and paints.
+            label (str | bool | None): the panel label.
         """
-        self.inner = inner
         self.x = Axis(Scale(xscale, xlim), xticks, xminor, xticklabels, xlabel)
         self.y = Axis(Scale(yscale, ylim), yticks, yminor, yticklabels, ylabel)
         self.top: Axis | None = None
         self.style = style
-        self.data = Group(clip=inner)
-        self.notes = Group()
+        self.label = label
+        self.inner: BBox | None = None
+        self.em: float | None = None
+        # builders run by group(): clipped data, unclipped notes, insets on top
+        self._data: list[Callable[[], Node]] = []
+        self._notes: list[Callable[[], Node]] = []
+        self._insets: list[Callable[[], Node]] = []
+
+    def place(self, inner: BBox, em: float) -> None:
+        """Gives the axes its rectangle; layout calls this, possibly more than once.
+
+        Args:
+            inner (BBox): the plot rectangle in pt.
+            em (float): the font size in pt that em lengths scale.
+        """
+        self.inner = inner
+        self.em = em
 
     def twin_x(
         self,
@@ -335,14 +354,18 @@ class Axes:
         Returns:
             tuple[np.ndarray, np.ndarray]: x and y in pt, non-finite where the scale cannot map a
                 value (log of values <= 0).
+
+        Raises:
+            RuntimeError: the axes has not been placed.
         """
+        r = self._rect()
         if coords == "data":
             fx, fy = self.x.scale.fraction(x), self.y.scale.fraction(y)
         else:
             fx, fy = np.asarray(x, dtype=float), np.asarray(y, dtype=float)
-        return self.inner.x0 + fx * self.inner.width, self.inner.y0 + fy * self.inner.height
+        return r.x0 + fx * r.width, r.y0 + fy * r.height
 
-    def line(self, x: ArrayLike, y: ArrayLike, stroke: Stroke, coords: Coords = "data", **node: object) -> Path:
+    def line(self, x: ArrayLike, y: ArrayLike, stroke: Stroke, coords: Coords = "data", **node: object) -> None:
         """Draws a polyline through the points, broken wherever a point cannot be mapped.
 
         Args:
@@ -351,10 +374,11 @@ class Axes:
             stroke (Stroke): the line style (solid, or dashed with `dash`).
             coords (Coords): what the positions mean.
             **node (object): other `Path` fields such as id or alpha.
-
-        Returns:
-            Path: the line, also added to `data`.
         """
+        self._data.append(lambda: self._line(x, y, stroke, coords, node))
+
+    def _line(self, x: ArrayLike, y: ArrayLike, stroke: Stroke, coords: Coords, node: dict[str, object]) -> Path:
+        """The polyline for `line`, in pt."""
         px, py = self.to_pt(x, y, coords)
         commands: list[Command] = []
         lifted = True
@@ -364,9 +388,7 @@ class Axes:
                 continue
             commands.append(("M", xi, yi) if lifted else ("L", xi, yi))
             lifted = False
-        path = Path(tuple(commands), stroke=stroke, **node)  # pyright: ignore[reportArgumentType]
-        self.data.add(path)
-        return path
+        return Path(tuple(commands), stroke=stroke, **node)  # pyright: ignore[reportArgumentType]
 
     def arrow(
         self,
@@ -376,7 +398,7 @@ class Axes:
         coords: Coords = "data",
         head: tuple[float, float] = (4.0, 3.0),
         both: bool = False,
-    ) -> Group:
+    ) -> None:
         """Draws a straight arrow with a filled triangular head at the end, or at both ends.
 
         Args:
@@ -386,10 +408,19 @@ class Axes:
             coords (Coords): what the positions mean.
             head (tuple[float, float]): head length and width in pt.
             both (bool): whether the tail gets a head too.
-
-        Returns:
-            Group: the shaft and heads, also added to `data`.
         """
+        self._data.append(lambda: self._arrow(start, end, stroke, coords, head, both))
+
+    def _arrow(
+        self,
+        start: tuple[float, float],
+        end: tuple[float, float],
+        stroke: Stroke,
+        coords: Coords,
+        head: tuple[float, float],
+        both: bool,
+    ) -> Group:
+        """The shaft and heads for `arrow`, in pt."""
         (x0, x1), (y0, y1) = self.to_pt([start[0], end[0]], [start[1], end[1]], coords)
         length, width = head
         dx, dy = float(x1 - x0), float(y1 - y0)
@@ -408,7 +439,6 @@ class Axes:
         arrow = Group([shaft, tip(float(x1), float(y1), ux, uy)])
         if both:
             arrow.add(tip(float(x0), float(y0), -ux, -uy))
-        self.data.add(arrow)
         return arrow
 
     def text(
@@ -417,56 +447,109 @@ class Axes:
         at: tuple[float, float],
         coords: Coords = "data",
         *,
-        size: float | None = None,
+        size: float | str | None = None,
         anchor: Literal["start", "middle", "end"] = "start",
         valign: Literal["baseline", "cap", "top", "middle", "bottom"] = "baseline",
         fill: Paint | None = None,
-    ) -> Text:
+    ) -> None:
         """Sets typst markup at a position, unclipped.
 
         Args:
             markup (str): typst markup.
             at (tuple[float, float]): the anchor position.
             coords (Coords): what the position means.
-            size (float | None): font size in pt, the style's label size if None.
+            size (float | str | None): font size, pt or a length such as "0.9em", the style's
+                label size if None.
             anchor (Literal["start", "middle", "end"]): which part of the text sits at x.
             valign (Literal["baseline", "cap", "top", "middle", "bottom"]): which part sits at y.
             fill (Paint | None): text colour, the style's paint if None.
-
-        Returns:
-            Text: the text, also added to `notes`.
         """
-        (x,), (y,) = self.to_pt([at[0]], [at[1]], coords)
-        node = Text(
-            markup, float(x), float(y), size or self.style.label_size, anchor, valign, fill=fill or self.style.paint
-        )
-        self.notes.add(node)
-        return node
+
+        def build() -> Text:
+            """The text in pt."""
+            (x,), (y,) = self.to_pt([at[0]], [at[1]], coords)
+            pt = self._size(self.style.label_size if size is None else size)
+            return Text(markup, float(x), float(y), pt, anchor, valign, fill=fill or self.style.paint)
+
+        self._notes.append(build)
+
+    def draw(self, component: Callable[[Axes], Node]) -> None:
+        """Adds a user component drawn once the axes is placed, clipped like data. the component
+        gets the placed axes, so it can map with `to_pt` and size things in pt.
+
+        Args:
+            component (Callable[[Axes], Node]): builds the nodes, in pt.
+        """
+        self._data.append(lambda: component(self))
+
+    def inset(self, panel: Panel, box: tuple[float, float, float, float], coords: Coords = "axes") -> None:
+        """Places a panel inside the axes, fit and centred in a box, above everything else and
+        unclipped. insets do not count toward `outer()` and get no panel label.
+
+        Args:
+            panel (Panel): the panel.
+            box (tuple[float, float, float, float]): x0, y0, x1, y1 of the box.
+            coords (Coords): what the box corners mean.
+        """
+
+        def build() -> Node:
+            """The placed panel."""
+            (x0, x1), (y0, y1) = self.to_pt([box[0], box[2]], [box[1], box[3]], coords)
+            panel.place(BBox(min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1)), self._em())
+            return panel.group()
+
+        self._insets.append(build)
 
     def group(self) -> Group:
-        """Everything drawn so far: data, then spines, ticks and labels, then notes.
+        """Everything drawn so far: data, then spines, ticks and labels, then notes and insets.
 
         Returns:
             Group: the axes as scene nodes, in page pt.
+
+        Raises:
+            RuntimeError: the axes has not been placed.
         """
-        return Group([self.data, *self._decorations(), self.notes])
+        data = Group([build() for build in self._data], clip=self._rect())
+        notes = Group([build() for build in self._notes])
+        insets = Group([build() for build in self._insets])
+        return Group([data, *self._decorations(), notes, insets])
 
     def outer(self) -> BBox:
         """The box around the rectangle and everything drawn outside it (tick and axis labels,
-        notes), from measured text.
+        notes), from measured text. data is clipped and insets sit inside, so neither counts.
 
         Returns:
             BBox: the box in pt.
+
+        Raises:
+            RuntimeError: the axes has not been placed.
         """
-        box = self.group().bbox()
+        box = Group([*self._decorations(), *(build() for build in self._notes)]).bbox()
         assert box is not None  # the spines always draw
         return box
 
+    def _rect(self) -> BBox:
+        """The placed rectangle."""
+        if self.inner is None:
+            raise RuntimeError("the axes has no rectangle yet: put it in a Figure layout")
+        return self.inner
+
+    def _em(self) -> float:
+        """The placed font size."""
+        if self.em is None:
+            raise RuntimeError("the axes has no font size yet: put it in a Figure layout")
+        return self.em
+
+    def _size(self, value: float | str) -> float:
+        """A length in pt, em resolved against the placed font size."""
+        return length(value, self._em())
+
     def _decorations(self) -> list[Node]:
         """Spines, ticks, tick labels and axis labels."""
-        s, r = self.style, self.inner
-        x_gaps = int(r.width // (3 * s.tick_label_size))
-        y_gaps = int(r.height // (2 * s.tick_label_size))
+        s, r = self.style, self._rect()
+        size, label_size = self._size(s.tick_label_size), self._size(s.label_size)
+        x_gaps = int(r.width // (3 * size))
+        y_gaps = int(r.height // (2 * size))
         bottom, left = self.x.resolved(x_gaps), self.y.resolved(y_gaps)
         top = bottom if self.top is None else self.top.resolved(x_gaps)
         top_scale = self.x.scale if self.top is None else self.top.scale
@@ -488,7 +571,6 @@ class Axes:
         # spines last among the lines, so their corners cover the tick ends
         nodes.append(Rect(r.x0, r.y0, r.width, r.height, stroke=Stroke(s.paint, s.spine)))
 
-        size = s.tick_label_size
         labels = Group(
             [
                 *(Text(m, x, r.y0 - s.tick_pad, size, "middle", "cap", fill=s.paint) for x, m in self._placed(self.x.scale, bottom, "x")),
@@ -504,34 +586,34 @@ class Axes:
         if self.x.label is not None:
             below = [t for t in texts if t.valign == "cap"]
             y = min((t.bbox().y0 for t in below), default=r.y0 - s.tick_pad) - s.label_pad
-            nodes.append(Text(self.x.label, mid_x, y, s.label_size, "middle", "top", fill=s.paint))
+            nodes.append(Text(self.x.label, mid_x, y, label_size, "middle", "top", fill=s.paint))
         if self.top is not None and self.top.label is not None:
             above = [t for t in texts if t.valign == "baseline"]
             y = max((t.bbox().y1 for t in above), default=r.y1 + s.tick_pad) + s.label_pad
-            nodes.append(Text(self.top.label, mid_x, y, s.label_size, "middle", "bottom", fill=s.paint))
+            nodes.append(Text(self.top.label, mid_x, y, label_size, "middle", "bottom", fill=s.paint))
         if self.y.label is not None:
             beside = [t for t in texts if t.anchor == "end"]
             x = min((t.bbox().x0 for t in beside), default=r.x0 - s.tick_pad) - s.label_pad
             # read bottom to top, with the text's bottom edge facing the axis
             turned = Affine.translate(x, mid_y) @ Affine.rotate(math.pi / 2)
-            nodes.append(Group([Text(self.y.label, 0, 0, s.label_size, "middle", "bottom", fill=s.paint)], transform=turned))
+            nodes.append(Group([Text(self.y.label, 0, 0, label_size, "middle", "bottom", fill=s.paint)], transform=turned))
         return nodes
 
-    def _ticks(self, scale: Scale, values: Sequence[float], side: str, length: float) -> list[Command]:
-        """Inward tick segments for values along one side."""
-        r = self.inner
+    def _ticks(self, scale: Scale, values: Sequence[float], side: str, size: float) -> list[Command]:
+        """Inward tick segments of a length in pt for values along one side."""
+        r = self._rect()
         commands: list[Command] = []
         for f in _visible(scale.fraction(values)):
             if side in ("bottom", "top"):
                 x = r.x0 + f * r.width
                 y = r.y0 if side == "bottom" else r.y1
                 commands.append(("M", x, y))
-                commands.append(("L", x, y + (length if side == "bottom" else -length)))
+                commands.append(("L", x, y + (size if side == "bottom" else -size)))
             else:
                 y = r.y0 + f * r.height
                 x = r.x0 if side == "left" else r.x1
                 commands.append(("M", x, y))
-                commands.append(("L", x + (length if side == "left" else -length), y))
+                commands.append(("L", x + (size if side == "left" else -size), y))
         return commands
 
     def _placed(
@@ -539,7 +621,7 @@ class Axes:
     ) -> list[tuple[float, str]]:
         """(position in pt, markup) for each visible labelled major tick."""
         majors, _, labels = resolved
-        r = self.inner
+        r = self._rect()
         start, span = (r.x0, r.width) if direction == "x" else (r.y0, r.height)
         fractions = scale.fraction(majors).tolist()
         return [(start + f * span, m) for f, m in zip(fractions, labels) if -_EPS <= f <= 1 + _EPS]

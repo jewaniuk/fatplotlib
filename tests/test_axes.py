@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 from fatplotlib.axes import Axes, Scale
-from fatplotlib.scene import BBox, Text
+from fatplotlib.scene import BBox, Group, Path, Text
 from fatplotlib.style import Stroke
 
 
@@ -56,8 +56,10 @@ def test_log_scale_needs_positive_limits():
 
 
 def axes(**kwargs: object) -> Axes:
-    """A 100 x 50 pt log-linear axes at (20, 10)."""
-    return Axes(BBox(20, 10, 120, 60), xlim=(0, 10), ylim=(1, 1000), yscale="log", **kwargs)  # pyright: ignore[reportArgumentType]
+    """A 100 x 50 pt log-linear axes at (20, 10), with 9 pt em."""
+    ax = Axes(xlim=(0, 10), ylim=(1, 1000), yscale="log", **kwargs)  # pyright: ignore[reportArgumentType]
+    ax.place(BBox(20, 10, 120, 60), 9)
+    return ax
 
 
 def test_data_and_axes_coords_map_to_pt():
@@ -69,24 +71,49 @@ def test_data_and_axes_coords_map_to_pt():
 
 
 def test_line_breaks_where_log_cannot_map():
-    path = axes().line([1, 2, 3, 4], [10, 0, 10, 10], Stroke("#000000"))
+    ax = axes()
+    ax.line([1, 2, 3, 4], [10, 0, 10, 10], Stroke("#000000"))
+    data = ax.group().children[0]
+    assert isinstance(data, Group) and isinstance(path := data.children[0], Path)
     assert [c[0] for c in path.commands] == ["M", "M", "L"]
+
+
+def test_drawing_waits_for_placement():
+    ax = Axes(xlim=(0, 10), ylim=(0, 1))
+    ax.line([0, 10], [0, 1], Stroke("#000000"))
+    with pytest.raises(RuntimeError, match="layout"):
+        ax.group()
+    ax.place(BBox(0, 0, 100, 50), 9)
+    ax.place(BBox(0, 0, 200, 50), 9)
+    data = ax.group().children[0]
+    assert isinstance(data, Group) and data.bbox() == BBox(0, 0, 200, 50)
+
+
+def test_text_sizes_scale_with_em():
+    ax = axes(xlabel="Length")
+    assert sorted({round(t.size, 6) for t in _texts(ax)}) == [8, 9]
+    # bigger text, fewer ticks fit
+    ax.place(BBox(20, 10, 120, 60), 18)
+    assert sorted({round(t.size, 6) for t in _texts(ax)}) == [16, 18]
 
 
 def test_outer_box_reaches_measured_labels():
     ax = axes(xlabel="Length", ylabel="Rate")
-    outer = ax.outer()
-    assert outer.x0 < ax.inner.x0 - 10 and outer.y0 < ax.inner.y0 - 10
+    outer, inner = ax.outer(), ax.inner
+    assert inner is not None
+    assert outer.x0 < inner.x0 - 10 and outer.y0 < inner.y0 - 10
     # the last tick labels overhang the right and top spines
-    assert outer.x1 > ax.inner.x1 + 2 and outer.y1 > ax.inner.y1 + 2
+    assert outer.x1 > inner.x1 + 2 and outer.y1 > inner.y1 + 2
 
 
 def test_twin_x_labels_the_top():
     ax = axes()
     ax.twin_x(ticks=[0, 5, 10], labels=["0", "1", "2"], label="Nodes")
-    tops = [t for t in _texts(ax) if t.y > ax.inner.y1]
+    inner = ax.inner
+    assert inner is not None
+    tops = [t for t in _texts(ax) if t.y > inner.y1]
     assert [t.markup for t in tops] == ["0", "1", "2", "Nodes"]
-    assert ax.outer().y1 > ax.inner.y1 + 10
+    assert ax.outer().y1 > inner.y1 + 10
 
 
 def _texts(ax: Axes) -> list[Text]:
