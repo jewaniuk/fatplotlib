@@ -141,17 +141,18 @@ class Figure:
     Attributes:
         width (float | str): "textwidth", "columnwidth" or a length.
         height (float | str): a length.
-        pad (float | str): space between the page edge and the layout.
+        pad (float | str): space between the page edge and the layout, enough by default that
+            antialiased edges and text are not cut off.
         root (Item | None): the layout, None until `layout` sets it.
     """
 
-    def __init__(self, width: float | str = "columnwidth", height: float | str = "3in", pad: float | str = 0) -> None:
+    def __init__(self, width: float | str = "columnwidth", height: float | str = "3in", pad: float | str = "1pt") -> None:
         """Sets up the figure.
 
         Args:
             width (float | str): "textwidth", "columnwidth" (of the target) or a length.
             height (float | str): a length.
-            pad (float | str): space between the page edge and the layout.
+            pad (float | str): space between the page edge and the layout, 1pt by default.
         """
         self.width = width
         self.height = height

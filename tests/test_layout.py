@@ -30,9 +30,9 @@ def test_column_shares_inner_edges_and_splits_inner_heights():
     assert a is not None and b is not None
     assert a.x0 == pytest.approx(b.x0) and a.x1 == pytest.approx(b.x1)
     assert a.height == pytest.approx(b.height)
-    # outer boxes fill the page, with the default 1em gap between them
-    assert top.outer().y1 == pytest.approx(3.4 * 72, abs=1e-6)
-    assert bottom.outer().y0 == pytest.approx(0, abs=1e-6)
+    # outer boxes fill the page inside the default 1pt pad, with the default 1em gap between them
+    assert top.outer().y1 == pytest.approx(3.4 * 72 - 1, abs=1e-6)
+    assert bottom.outer().y0 == pytest.approx(1, abs=1e-6)
     assert top.outer().y0 - bottom.outer().y1 == pytest.approx(PAPER.base)
 
 
