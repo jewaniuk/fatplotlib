@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 from fatplotlib.paths import PathBuilder
-from fatplotlib.scene import BBox, Group, Path, Polylines
+from fatplotlib.scene import BBox, Group, Markers, Path, Polylines
 from fatplotlib.style import Stroke
 from fatplotlib.transform import Affine
 
@@ -97,3 +97,16 @@ def test_polylines_bbox_skips_non_finite_points():
     ys = np.array([[0, 5, np.nan], [-1, 2, 3]], dtype=float)
     assert Polylines(xs, ys, stroke=Stroke("#000000", 1)).bbox() == BBox(-0.5, -1.5, 2.5, 5.5)
     assert Polylines(np.full((1, 2), np.nan), np.zeros((1, 2))).bbox() is None
+
+
+def test_markers_bbox_reaches_each_shape_and_skips_non_finite_points():
+    xs, ys = np.array([0.0, 10.0, np.nan]), np.array([0.0, 5.0, 1.0])
+    assert Markers(xs, ys, "s", 4).bbox() == BBox(-2, -2, 12, 7)
+    # the diamond's corners reach past half the size, the thin one is narrower
+    diamond = Markers(xs, ys, "D", 4, stroke=Stroke("#000000", 0.5)).bbox()
+    assert diamond is not None
+    h = 2 * math.sqrt(2) + 0.25
+    assert np.allclose([diamond.x0, diamond.y0, diamond.x1, diamond.y1], [-h, -h, 10 + h, 5 + h])
+    thin = Markers(xs, ys, "d", 4).bbox()
+    assert thin is not None and math.isclose(thin.x0, -0.6 * 2 * math.sqrt(2))
+    assert Markers(np.array([np.nan]), np.array([0.0])).bbox() is None

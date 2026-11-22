@@ -4,7 +4,7 @@ import pytest
 
 from fatplotlib.render.svg import render
 from fatplotlib.scene import Group, Rect, Text
-from fatplotlib.style import Stroke, Token
+from fatplotlib.style import Mix, Stroke, Token, mix_colours
 from fatplotlib.theme import DARK, LIGHT
 
 
@@ -45,3 +45,23 @@ def test_text_recolours_per_theme():
 def test_geometry_does_not_depend_on_theme():
     box = scene().children[0]
     assert box.bbox() == Rect(0, 0, 20, 10, stroke=Stroke("#000000", 0.4)).bbox()
+
+
+def test_mix_matches_srgb_blending_and_oklab_midpoint():
+    # 60 % toward white in srgb, as the reference figures' faint marker fills
+    assert mix_colours("#e89145", "#ffffff", 0.6, "srgb") == "#f6d3b5"
+    # oklab's halfway lightness between black and white is a darker grey than srgb's
+    assert mix_colours("#000000", "#ffffff", 0.5) == "#636363"
+    assert mix_colours("#000000", "#ffffff", 0.5, "srgb") == "#808080"
+    # alpha is premultiplied, so a transparent side lends no colour
+    assert mix_colours("#ff000000", "#0000ff", 0.5, "srgb") == "#0000ff80"
+
+
+def test_mix_toward_a_token_follows_the_theme():
+    faint = Rect(0, 0, 1, 1, fill=Mix("#e89145", Token("bg"), 0.6))
+    light, dark = (render(faint, 1, 1, theme) for theme in (LIGHT, DARK))
+    assert f'fill="{mix_colours("#e89145", "#ffffff", 0.6)}"' in light
+    assert f'fill="{mix_colours("#e89145", "#1e1e1e", 0.6)}"' in dark
+    assert "color-mix(in oklab, #e89145, var(--bg) 60%)" in render(faint, 1, 1)
+    stroke = Rect(0, 0, 1, 1, stroke=Stroke(Mix(Token("fg"), "#ffffff", 0.25, "srgb")))
+    assert "stroke:color-mix(in srgb, var(--fg), #ffffff 25%)" in render(stroke, 1, 1)

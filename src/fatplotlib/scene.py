@@ -22,6 +22,33 @@ type Command = (
     | tuple[Literal["Z"]]
 )
 
+type MarkerShape = Literal["o", "s", "^", "v", "d", "D", "+", "x"]
+"""a marker: circle, square, triangle up or down, thin diamond, diamond, plus or cross."""
+
+# circle control point offset for a radius of 0.5
+_K = 0.5 * 0.5522847498
+# diamond half-diagonal: the unit square turned 45 degrees
+_H = math.sqrt(2) / 2
+# each marker at size 1 centred on the origin, in matplotlib's proportions: the circle's
+# diameter, the square's side, the triangles' width and height and the crosses' arms are 1
+MARKER_SHAPES: dict[MarkerShape, tuple[Command, ...]] = {
+    "o": (
+        ("M", 0.5, 0.0),
+        ("C", 0.5, _K, _K, 0.5, 0.0, 0.5),
+        ("C", -_K, 0.5, -0.5, _K, -0.5, 0.0),
+        ("C", -0.5, -_K, -_K, -0.5, 0.0, -0.5),
+        ("C", _K, -0.5, 0.5, -_K, 0.5, 0.0),
+        ("Z",),
+    ),
+    "s": (("M", -0.5, -0.5), ("L", 0.5, -0.5), ("L", 0.5, 0.5), ("L", -0.5, 0.5), ("Z",)),
+    "^": (("M", 0.0, 0.5), ("L", -0.5, -0.5), ("L", 0.5, -0.5), ("Z",)),
+    "v": (("M", 0.0, -0.5), ("L", 0.5, 0.5), ("L", -0.5, 0.5), ("Z",)),
+    "d": (("M", 0.6 * _H, 0.0), ("L", 0.0, _H), ("L", -0.6 * _H, 0.0), ("L", 0.0, -_H), ("Z",)),
+    "D": (("M", _H, 0.0), ("L", 0.0, _H), ("L", -_H, 0.0), ("L", 0.0, -_H), ("Z",)),
+    "+": (("M", -0.5, 0.0), ("L", 0.5, 0.0), ("M", 0.0, -0.5), ("L", 0.0, 0.5)),
+    "x": (("M", -0.5, -0.5), ("L", 0.5, 0.5), ("M", -0.5, 0.5), ("L", 0.5, -0.5)),
+}
+
 # gauss-legendre nodes and weights on [0, 1] for cubic arc length
 _GAUSS_T, _GAUSS_W = np.polynomial.legendre.leggauss(24)
 _GAUSS_T, _GAUSS_W = (_GAUSS_T + 1) / 2, _GAUSS_W / 2
@@ -389,6 +416,40 @@ class Polylines(Shape):
             return None
         xs, ys = self.xs[finite], self.ys[finite]
         return BBox(float(xs.min()), float(ys.min()), float(xs.max()), float(ys.max())).padded(self._pad())
+
+
+@dataclass(slots=True, eq=False)
+class Markers(Shape):
+    """One marker shape at many points in one style, emitted as one svg path. points that are
+    not finite are skipped.
+
+    Attributes:
+        xs (np.ndarray): centre x positions, shape (points,).
+        ys (np.ndarray): centre y positions, the same shape.
+        shape (MarkerShape): the marker, one of `MARKER_SHAPES`.
+        size (float): the circle's diameter in pt; other shapes keep matplotlib's proportions to it.
+    """
+
+    xs: np.ndarray
+    ys: np.ndarray
+    shape: MarkerShape = "o"
+    size: float = 3.0
+
+    def bbox(self) -> BBox | None:
+        """The box around every drawn marker, stroke included.
+
+        Returns:
+            BBox | None: the box, None if no point is finite.
+        """
+        finite = np.isfinite(self.xs) & np.isfinite(self.ys)
+        if not finite.any():
+            return None
+        xs, ys = self.xs[finite], self.ys[finite]
+        reach = [abs(v) for c in MARKER_SHAPES[self.shape] for v in c[1:]]
+        # x and y alternate in every command, so even entries are x and odd are y
+        hx, hy = max(reach[0::2]) * self.size, max(reach[1::2]) * self.size
+        box = BBox(float(xs.min()) - hx, float(ys.min()) - hy, float(xs.max()) + hx, float(ys.max()) + hy)
+        return box.padded(self._pad())
 
 
 @dataclass(slots=True)

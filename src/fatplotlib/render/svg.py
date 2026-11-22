@@ -5,7 +5,8 @@ locally. `<defs>` (gradients, clip paths, typst glyphs) are collected once per d
 content hash or typst's own glyph hash, so ids are stable across runs and duplicates collapse.
 
 without a theme every token becomes a css custom property (`fill:var(--fg)`), which the preview
-defines per theme. with a theme the scene is resolved to literal values first, for export.
+defines per theme, and a `Mix` becomes css `color-mix` over them. with a theme the scene is
+resolved to literal values first, for export.
 """
 
 import hashlib
@@ -14,8 +15,22 @@ from html import escape
 
 import numpy as np
 
-from fatplotlib.scene import BBox, Circle, Ellipse, Group, Node, Path, Polylines, Rect, Shape, Text
-from fatplotlib.style import Paint, RadialGradient, Stroke, Token
+from fatplotlib.scene import (
+    MARKER_SHAPES,
+    BBox,
+    Circle,
+    Command,
+    Ellipse,
+    Group,
+    Markers,
+    Node,
+    Path,
+    Polylines,
+    Rect,
+    Shape,
+    Text,
+)
+from fatplotlib.style import Mix, Paint, RadialGradient, Stroke, Token, mix_colours
 from fatplotlib.theme import Theme
 
 
@@ -54,6 +69,8 @@ def _resolved(node: Node, theme: Theme) -> Node:
         if isinstance(value, RadialGradient):
             stops = tuple(replace(stop, colour=theme.colour(stop.colour)) for stop in value.stops)
             return replace(value, stops=stops)
+        if isinstance(value, Mix):
+            return mix_colours(theme.colour(value.a), theme.colour(value.b), value.t, value.space)
         return value if value is None else theme.colour(value)
 
     changes: dict[str, object] = {"alpha": theme.number(node.alpha)}
@@ -89,6 +106,9 @@ def _paint(prop: str, paint: Paint | None, defs: dict[str, str]) -> tuple[list[t
             return [(prop, "none")], []
         case Token(name):
             return [], [f"{prop}:var(--{name})"]
+        case Mix(a, b, t, space):
+            a_css, b_css = (f"var(--{c.name})" if isinstance(c, Token) else c for c in (a, b))
+            return [], [f"{prop}:color-mix(in {space}, {a_css}, {b_css} {_num(t * 100)}%)"]
         case RadialGradient():
             return [(prop, f"url(#{_gradient(paint, defs)})")], []
         case str() if len(paint) == 9 and paint.startswith("#"):
@@ -177,7 +197,39 @@ def _polylines_data(node: Polylines) -> str:
     return " ".join(pairs)
 
 
-def _node(node: Node, defs: dict[str, str]) -> str:  # noqa: C901, PLR0911 - one branch per node type
+def _markers_data(node: Markers) -> str:
+    """The svg `d` string of markers: an absolute move to each finite point, then the shape in
+    relative commands, the same text for every point."""
+    (_, x0, y0), *rest = MARKER_SHAPES[node.shape]
+    size = node.size
+    shape = _relative(rest, (x0, y0), size)
+    finite = np.isfinite(node.xs) & np.isfinite(node.ys)
+    xs, ys = (node.xs[finite] + x0 * size).tolist(), (node.ys[finite] + y0 * size).tolist()
+    return " ".join(f"M{_num(x)} {_num(y)}{shape}" for x, y in zip(xs, ys))
+
+
+def _relative(commands: list[Command], start: tuple[float, float], scale: float) -> str:
+    """Path commands after a move to `start` as relative svg commands (m, l, c, z), scaled."""
+    parts = []
+    current = first = start
+    for command in commands:
+        match command:
+            case ("M" | "L" as op, x, y):
+                parts.append(f"{op.lower()}{_num((x - current[0]) * scale)} {_num((y - current[1]) * scale)}")
+                current = (x, y)
+                if op == "M":
+                    first = current
+            case ("C", *points):
+                offsets = [v - current[i % 2] for i, v in enumerate(points)]
+                parts.append("c" + " ".join(_num(v * scale) for v in offsets))
+                current = (points[4], points[5])
+            case ("Z",):
+                parts.append("z")
+                current = first
+    return "".join(parts)
+
+
+def _node(node: Node, defs: dict[str, str]) -> str:  # noqa: C901, PLR0911, PLR0912 - one branch per node type
     """Svg text for one node and its children, adding what it references to `defs`."""
     match node:
         case Group():
@@ -192,6 +244,8 @@ def _node(node: Node, defs: dict[str, str]) -> str:  # noqa: C901, PLR0911 - one
             return f"<path{_shape_attrs(node, [('d', _path_data(node))], defs)}/>"
         case Polylines():
             return f"<path{_shape_attrs(node, [('d', _polylines_data(node))], defs)}/>"
+        case Markers():
+            return f"<path{_shape_attrs(node, [('d', _markers_data(node))], defs)}/>"
         case Rect():
             geometry = [(k, _num(v)) for k, v in (("x", node.x), ("y", node.y), ("width", node.width), ("height", node.height))]
             if node.radius:

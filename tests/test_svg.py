@@ -8,7 +8,7 @@ import resvg_py
 
 from fatplotlib.paths import PathBuilder
 from fatplotlib.render.svg import render
-from fatplotlib.scene import BBox, Circle, Group, Polylines, Rect, Text
+from fatplotlib.scene import BBox, Circle, Group, Markers, Polylines, Rect, Text
 from fatplotlib.style import RadialGradient, Stop, Stroke, with_alpha
 from fatplotlib.theme import LIGHT
 from fatplotlib.transform import Affine
@@ -80,3 +80,17 @@ def test_polylines_build_and_svg_time():
     done = time.perf_counter()
     print(f"\n1000 x 200 polylines: build {1e3 * (built - start):.1f} ms, svg {1e3 * (done - built):.1f} ms, {len(svg) / 1e6:.1f} MB")
     assert svg.count("<path") == 1
+
+
+def test_markers_emit_one_path_with_the_shape_at_each_finite_point():
+    xs, ys = np.array([10.0, np.nan, 20.0]), np.array([5.0, 5.0, 8.0])
+    svg = render(Markers(xs, ys, "s", 2, fill="#000000"), 30, 10, LIGHT)
+    (path,) = ET.fromstring(svg).iter("{http://www.w3.org/2000/svg}path")
+    assert path.get("d") == "M9 4l2 0l0 2l-2 0z M19 7l2 0l0 2l-2 0z"
+    # a circle closes on its start, a cross is two strokes
+    circle = render(Markers(xs[:1], ys[:1], "o", 2), 30, 10)
+    assert "M11 5c0 0.552285 " in circle and circle.count("c") >= 4
+    cross = render(Markers(xs[:1], ys[:1], "+", 2, stroke=Stroke("#000000")), 30, 10)
+    assert "M9 5l2 0m-1 -1l0 2" in cross
+    ET.fromstring(svg)
+    resvg_py.svg_to_bytes(svg_string=svg, dpi=72)

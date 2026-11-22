@@ -1,12 +1,12 @@
 """axes: scales, ticks, spines and data drawing on a rectangle that layout places.
 
-an `Axes` is built before it has a rectangle: `line`, `lines`, `arrow`, `text`, `draw` and `inset` record
-what to draw, and `group()` builds the scene nodes once `place` has given the rectangle (`inner`)
-and the font size that em lengths scale. around the rectangle it draws spines on all four sides,
-inward major and minor ticks on every side, typst tick labels and axis labels on the bottom and
-left (and on top for a twin axis). data drawn with `line`, `lines`, `arrow` and `draw` is clipped to the
-rectangle, `text` and insets are not. `outer()` is the box the decorations reach, which layout
-measures.
+an `Axes` is built before it has a rectangle: `line`, `lines`, `markers`, `arrow`, `text`, `draw` and
+`inset` record what to draw, and `group()` builds the scene nodes once `place` has given the rectangle
+(`inner`) and the font size that em lengths scale. around the rectangle it draws spines on all four
+sides, inward major and minor ticks on every side, typst tick labels and axis labels on the bottom and
+left (and on top for a twin axis). data drawn with `line`, `lines`, `markers`, `arrow` and `draw` is
+clipped to the rectangle, `text`, unclipped markers and insets are not. `outer()` is the box the
+decorations and notes (text, unclipped markers) reach, which layout measures.
 
 ticks follow a nice-number rule: the smallest step of 1, 2, 2.5 or 5 x 10^k (linear), or the
 smallest decade stride (log), that leaves at most `max_gaps` gaps between labelled ticks.
@@ -23,7 +23,7 @@ import numpy as np
 from numpy.typing import ArrayLike
 
 from fatplotlib.panel import Panel
-from fatplotlib.scene import BBox, Command, Group, Node, Path, Polylines, Rect, Text
+from fatplotlib.scene import BBox, Command, Group, Markers, MarkerShape, Node, Path, Polylines, Rect, Text
 from fatplotlib.style import Paint, Stroke, Token
 from fatplotlib.transform import Affine
 from fatplotlib.units import length
@@ -241,6 +241,24 @@ class AxesStyle:
     paint: Paint = Token("fg")
 
 
+@dataclass(frozen=True, slots=True)
+class Marker:
+    """How markers look.
+
+    Attributes:
+        shape (MarkerShape): the marker shape.
+        size (float | str): the circle's diameter, pt or a length such as "0.4em"; other shapes
+            keep matplotlib's proportions to it.
+        fill (Paint | None): the fill paint, none if None.
+        stroke (Stroke | None): the outline, none if None (`+` and `x` need one).
+    """
+
+    shape: MarkerShape = "o"
+    size: float | str = 3.0
+    fill: Paint | None = Token("fg")
+    stroke: Stroke | None = None
+
+
 class Axes:
     """A plot: data drawing plus spines, ticks and labels, built once layout places it.
 
@@ -365,7 +383,16 @@ class Axes:
             fx, fy = np.asarray(x, dtype=float), np.asarray(y, dtype=float)
         return r.x0 + fx * r.width, r.y0 + fy * r.height
 
-    def line(self, x: ArrayLike, y: ArrayLike, stroke: Stroke, coords: Coords = "data", **node: object) -> None:
+    def line(
+        self,
+        x: ArrayLike,
+        y: ArrayLike,
+        stroke: Stroke,
+        coords: Coords = "data",
+        *,
+        marker: Marker | None = None,
+        **node: object,
+    ) -> None:
         """Draws a polyline through the points, broken wherever a point cannot be mapped.
 
         Args:
@@ -373,9 +400,43 @@ class Axes:
             y (ArrayLike): y positions.
             stroke (Stroke): the line style (solid, or dashed with `dash`).
             coords (Coords): what the positions mean.
-            **node (object): other `Path` fields such as id or alpha.
+            marker (Marker | None): markers drawn over the line at each point, none if None.
+            **node (object): other `Path` fields such as id or alpha, for the line only.
         """
         self._data.append(lambda: self._line(x, y, stroke, coords, node))
+        if marker is not None:
+            self.markers(x, y, marker, coords)
+
+    def markers(
+        self,
+        x: ArrayLike,
+        y: ArrayLike,
+        marker: Marker = Marker(),
+        coords: Coords = "data",
+        *,
+        clip: bool = True,
+        **node: object,
+    ) -> None:
+        """Draws a marker at each point, skipping points that cannot be mapped.
+
+        Args:
+            x (ArrayLike): x positions.
+            y (ArrayLike): y positions.
+            marker (Marker): the marker style.
+            coords (Coords): what the positions mean.
+            clip (bool): clip to the rectangle like data; False draws them as notes, which count
+                toward `outer()` so layout makes room (hand-made legends, points on spines).
+            **node (object): other `Markers` fields such as id or alpha.
+        """
+        (self._data if clip else self._notes).append(lambda: self._markers(x, y, marker, coords, node))
+
+    def _markers(self, x: ArrayLike, y: ArrayLike, marker: Marker, coords: Coords, node: dict[str, object]) -> Markers:
+        """The markers for `markers`, in pt."""
+        px, py = self.to_pt(x, y, coords)
+        size = self._size(marker.size)
+        return Markers(
+            np.ravel(px), np.ravel(py), marker.shape, size, fill=marker.fill, stroke=marker.stroke, **node  # pyright: ignore[reportArgumentType]
+        )
 
     def _line(self, x: ArrayLike, y: ArrayLike, stroke: Stroke, coords: Coords, node: dict[str, object]) -> Path:
         """The polyline for `line`, in pt."""

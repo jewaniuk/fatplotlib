@@ -1,11 +1,35 @@
 """paints and strokes.
 
 a paint is a css colour string ("#rrggbb", or "#rrggbbaa" for a colour with alpha), a theme
-`Token`, or a `RadialGradient`.
+`Token`, a `Mix` of two colours, or a `RadialGradient`.
+
+colours blend in oklab by default, a perceptual space where a mix halfway between two colours
+looks halfway between them. "srgb" blends the stored channel values, as matplotlib does.
 """
 
 from dataclasses import dataclass
 from typing import Literal
+
+import numpy as np
+
+type Space = Literal["oklab", "srgb"]
+"""the colour space a blend interpolates in."""
+
+# linear srgb -> lms cone response, and cube-rooted lms -> oklab (bjorn ottosson's matrices)
+_LMS = np.array(
+    [
+        [0.4122214708, 0.5363325363, 0.0514459929],
+        [0.2119034982, 0.6806995451, 0.1073969566],
+        [0.0883024619, 0.2817188376, 0.6299787005],
+    ]
+)
+_LAB = np.array(
+    [
+        [0.2104542553, 0.7936177850, -0.0040720468],
+        [1.9779984951, -2.4285922050, 0.4505937099],
+        [0.0259040371, 0.7827717662, -0.8086757660],
+    ]
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,7 +75,24 @@ class RadialGradient:
     r: float = 0.5
 
 
-type Paint = str | Token | RadialGradient
+@dataclass(frozen=True, slots=True)
+class Mix:
+    """Two colours blended, either side a literal or a token, so a mix toward `Token("bg")` follows the theme.
+
+    Attributes:
+        a (str | Token): the base colour.
+        b (str | Token): the colour mixed in.
+        t (float): how much of b, 0 (all a) to 1 (all b).
+        space (Space): the colour space the blend interpolates in.
+    """
+
+    a: str | Token
+    b: str | Token
+    t: float
+    space: Space = "oklab"
+
+
+type Paint = str | Token | Mix | RadialGradient
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,3 +125,54 @@ def with_alpha(colour: str, alpha: float) -> str:
         str: the "#rrggbbaa" colour.
     """
     return f"{colour[:7]}{round(alpha * 255):02x}"
+
+
+def srgb_to_oklab(rgb: np.ndarray) -> np.ndarray:
+    """Converts srgb colours to oklab.
+
+    Args:
+        rgb (np.ndarray): srgb channels 0 to 1, shape (..., 3).
+
+    Returns:
+        np.ndarray: oklab L, a, b, shape (..., 3).
+    """
+    linear = np.where(rgb <= 0.04045, rgb / 12.92, ((rgb + 0.055) / 1.055) ** 2.4)
+    return np.cbrt(linear @ _LMS.T) @ _LAB.T
+
+
+def oklab_to_srgb(lab: np.ndarray) -> np.ndarray:
+    """Converts oklab colours to srgb, clipped to the srgb gamut.
+
+    Args:
+        lab (np.ndarray): oklab L, a, b, shape (..., 3).
+
+    Returns:
+        np.ndarray: srgb channels 0 to 1, shape (..., 3).
+    """
+    linear = np.clip(((lab @ np.linalg.inv(_LAB).T) ** 3) @ np.linalg.inv(_LMS).T, 0, 1)
+    return np.where(linear <= 0.0031308, linear * 12.92, 1.055 * linear ** (1 / 2.4) - 0.055)
+
+
+def mix_colours(a: str, b: str, t: float, space: Space = "oklab") -> str:
+    """Blends two literal colours as css `color-mix` does, with alpha premultiplied.
+
+    Args:
+        a (str): the base "#rrggbb" or "#rrggbbaa" colour.
+        b (str): the colour mixed in.
+        t (float): how much of b, 0 to 1.
+        space (Space): the colour space the blend interpolates in.
+
+    Returns:
+        str: the "#rrggbb" colour, or "#rrggbbaa" if the result is not opaque.
+    """
+    rgba = np.array([[int(c[i : i + 2] or "ff", 16) / 255 for i in (1, 3, 5, 7)] for c in (a, b)])
+    rgb, alpha = rgba[:, :3], rgba[:, 3:]
+    channels = srgb_to_oklab(rgb) if space == "oklab" else rgb
+    mixed_alpha = float((1 - t) * alpha[0, 0] + t * alpha[1, 0])
+    if mixed_alpha == 0:
+        return "#00000000"
+    premultiplied = (1 - t) * channels[0] * alpha[0] + t * channels[1] * alpha[1]
+    mixed = premultiplied / mixed_alpha
+    out = np.clip(oklab_to_srgb(mixed) if space == "oklab" else mixed, 0, 1)
+    colour = "#" + "".join(f"{round(c * 255):02x}" for c in out.tolist())
+    return colour if mixed_alpha == 1 else with_alpha(colour, mixed_alpha)

@@ -5,8 +5,8 @@ import math
 import numpy as np
 import pytest
 
-from fatplotlib.axes import Axes, Scale
-from fatplotlib.scene import BBox, Group, Path, Polylines, Text
+from fatplotlib.axes import Axes, Marker, Scale
+from fatplotlib.scene import BBox, Group, Markers, Path, Polylines, Text
 from fatplotlib.style import Stroke
 
 
@@ -136,3 +136,23 @@ def _texts(ax: Axes) -> list[Text]:
             found.append(node)
         stack[:0] = getattr(node, "children", [])
     return found
+
+
+def test_markers_size_in_em_and_line_markers_are_clipped_data():
+    ax = axes()
+    ax.line([0, 10], [1, 1000], Stroke("#000000"), marker=Marker("s", "0.5em"))
+    data = ax.group().children[0]
+    assert isinstance(data, Group) and isinstance(dots := data.children[1], Markers)
+    assert dots.size == 4.5 and dots.shape == "s"
+    assert np.allclose(dots.xs, [20, 120]) and np.allclose(dots.ys, [10, 60])
+    ax.place(BBox(20, 10, 120, 60), 18)
+    dots = ax.group().children[0].children[1]  # pyright: ignore[reportAttributeAccessIssue]
+    assert dots.size == 9
+
+
+def test_unclipped_markers_count_toward_outer():
+    ax = axes()
+    before = ax.outer()
+    ax.markers([1.1], [0.5], Marker(size=20), "axes", clip=False)
+    # centred at 20 + 1.1 * 100 = 130, radius 10
+    assert ax.outer().x1 == 140 and ax.outer().x0 == before.x0
