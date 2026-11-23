@@ -654,7 +654,9 @@ class Axes:
 
     def outer(self) -> BBox:
         """The box around the rectangle and everything drawn outside it (tick and axis labels,
-        notes), from measured text. data is clipped and insets sit inside, so neither counts.
+        notes), from measured text. data is clipped and insets sit inside, so neither counts. an
+        axis label counts only across its axis: along it, one longer than the rectangle may spill
+        into the gap beside it, as `spills` reports.
 
         Returns:
             BBox: the box in pt.
@@ -662,9 +664,42 @@ class Axes:
         Raises:
             RuntimeError: the axes has not been placed.
         """
-        box = Group([*self._decorations(), *(build() for build in self._notes)]).bbox()
+        r, resolved = self._rect(), self._resolved()
+        box = Group([*self._spines_and_ticks(resolved), *(build() for build in self._notes)]).bbox()
         assert box is not None  # the spines always draw
+        for name, ticks, label in self._side_texts(resolved):
+            extent = ticks.bbox()
+            if extent is not None:
+                box = box.union(extent)
+            extent = label.bbox() if label is not None else None
+            if extent is not None:
+                # along its axis only the part beside the rectangle counts
+                if name in ("bottom", "top"):
+                    box = box.union(BBox(max(extent.x0, r.x0), extent.y0, min(extent.x1, r.x1), extent.y1))
+                else:
+                    box = box.union(BBox(extent.x0, max(extent.y0, r.y0), extent.x1, min(extent.y1, r.y1)))
         return box
+
+    def spills(self) -> list[BBox]:
+        """The boxes of axis labels longer than the rectangle along their axis, which `outer`
+        leaves out along it, for layout to check against other text.
+
+        Returns:
+            list[BBox]: the full label boxes in pt.
+
+        Raises:
+            RuntimeError: the axes has not been placed.
+        """
+        r, boxes = self._rect(), []
+        for name, _, label in self._side_texts(self._resolved()):
+            box = label.bbox() if label is not None else None
+            if box is None:
+                continue
+            horizontal = name in ("bottom", "top")
+            lo, hi, start, end = (box.x0, box.x1, r.x0, r.x1) if horizontal else (box.y0, box.y1, r.y0, r.y1)
+            if lo < start or hi > end:
+                boxes.append(box)
+        return boxes
 
     def _rect(self) -> BBox:
         """The placed rectangle."""
@@ -697,30 +732,44 @@ class Axes:
         the tick label size."""
         r, size = self._rect(), self._size(self.style.tick_label_size)
         across, up = int(r.width // (3 * size)), int(r.height // (2 * size))
-        return {name: side.axis.resolved(across if name in ("bottom", "top") else up) for name, side in self._sides().items()}
+        return {
+            name: side.axis.resolved(across if name in ("bottom", "top") else up)
+            for name, side in self._sides().items()
+        }
 
     def _decorations(self) -> list[Node]:
         """Spines, ticks, and each labelled side's tick labels and axis label."""
+        resolved = self._resolved()
+        nodes = self._spines_and_ticks(resolved)
+        for _, ticks, label in self._side_texts(resolved):
+            nodes += [ticks] if label is None else [ticks, label]
+        return nodes
+
+    def _spines_and_ticks(self, resolved: dict[SideName, Resolved]) -> list[Node]:
+        """Major and minor ticks on every drawn side, then the spines."""
         s, r = self.style, self._rect()
-        sides, resolved = self._sides(), self._resolved()
         major: list[Command] = []
         minor: list[Command] = []
-        for name, side in sides.items():
+        for name, side in self._sides().items():
             majors, minors, _ = resolved[name]
             major += self._ticks(side.axis.scale, majors, name, s.major)
             minor += self._ticks(side.axis.scale, minors, name, s.minor)
-        nodes: list[Node] = [
+        return [
             Path(tuple(major), stroke=Stroke(s.paint, s.major_width)),
             Path(tuple(minor), stroke=Stroke(s.paint, s.minor_width)),
+            # spines last among the lines, so their corners cover the tick ends
+            Rect(r.x0, r.y0, r.width, r.height, stroke=Stroke(s.paint, s.spine)),
         ]
-        # spines last among the lines, so their corners cover the tick ends
-        nodes.append(Rect(r.x0, r.y0, r.width, r.height, stroke=Stroke(s.paint, s.spine)))
-        for name, side in sides.items():
-            if side.labelled:
-                nodes += self._side_labels(name, side.axis, resolved[name])
-        return nodes
 
-    def _side_labels(self, name: SideName, axis: Axis, resolved: Resolved) -> list[Node]:
+    def _side_texts(self, resolved: dict[SideName, Resolved]) -> list[tuple[SideName, Group, Node | None]]:
+        """Each labelled side's name, tick labels and axis label (None without one)."""
+        return [
+            (name, *self._side_labels(name, side.axis, resolved[name]))
+            for name, side in self._sides().items()
+            if side.labelled
+        ]
+
+    def _side_labels(self, name: SideName, axis: Axis, resolved: Resolved) -> tuple[Group, Node | None]:
         """One side's tick labels, a tick pad out from the spine, and its axis label a label pad
         beyond them. side axis labels read bottom to top on the left and top to bottom on the
         right, their bottom edge facing the axis either way."""
@@ -729,7 +778,9 @@ class Axes:
         majors, _, labels = resolved
         horizontal = name in ("bottom", "top")
         start, span = (r.x0, r.width) if horizontal else (r.y0, r.height)
-        at = [(start + f * span, m) for f, m in zip(axis.scale.fraction(majors).tolist(), labels) if -EPS <= f <= 1 + EPS]
+        at = [
+            (start + f * span, m) for f, m in zip(axis.scale.fraction(majors).tolist(), labels) if -EPS <= f <= 1 + EPS
+        ]
         match name:
             case "bottom":
                 texts = [Text(m, p, r.y0 - s.tick_pad, size, "middle", "cap", fill=s.paint) for p, m in at]
@@ -741,7 +792,7 @@ class Axes:
                 texts = [Text(m, r.x1 + s.tick_pad, p, size, "start", "middle", fill=s.paint) for p, m in at]
         ticks = Group(list(texts))
         if axis.label is None:
-            return [ticks]
+            return ticks, None
         box = ticks.bbox() or BBox(r.x0 - s.tick_pad, r.y0 - s.tick_pad, r.x1 + s.tick_pad, r.y1 + s.tick_pad)
         mid_x, mid_y = (r.x0 + r.x1) / 2, (r.y0 + r.y1) / 2
         match name:
@@ -750,10 +801,12 @@ class Axes:
             case "top":
                 label = Text(axis.label, mid_x, box.y1 + s.label_pad, label_size, "middle", "bottom", fill=s.paint)
             case "left" | "right":
-                x, turn = (box.x0 - s.label_pad, math.pi / 2) if name == "left" else (box.x1 + s.label_pad, -math.pi / 2)
+                x, turn = (
+                    (box.x0 - s.label_pad, math.pi / 2) if name == "left" else (box.x1 + s.label_pad, -math.pi / 2)
+                )
                 turned = Affine.translate(x, mid_y) @ Affine.rotate(turn)
                 label = Group([Text(axis.label, 0, 0, label_size, "middle", "bottom", fill=s.paint)], transform=turned)
-        return [ticks, label]
+        return ticks, label
 
     def _ticks(self, scale: Scale, values: Sequence[float], side: SideName, size: float) -> list[Command]:
         """Inward tick segments of a length in pt for values along one side."""
@@ -893,4 +946,3 @@ def _by_colour[N: Node](
 def _visible(fractions: np.ndarray) -> list[float]:
     """The fractions that land on the axis."""
     return [f for f in fractions.tolist() if -EPS <= f <= 1 + EPS]
-

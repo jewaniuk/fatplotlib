@@ -1,4 +1,4 @@
-"""layout: figures, targets, rows and columns of axes and panels, and panel labels.
+"""layout: figures, targets, rows, columns and grids of axes and panels, and panel labels.
 
 a script builds axes and panels standalone, then places them once with a nested expression:
 `fig.layout(Column(photons, comm, share="x"))`. nothing is solved until `Figure.scene` gets a
@@ -7,23 +7,35 @@ re-solves for a paper or a talk.
 
 the solve uses kiwisolver (cassowary, as matplotlib's constrained layout). every item gets an
 outer box; an axes's inner box (the plot rectangle) sits inside it by margins measured from its
-typst text, and keeps a fixed `width` or `height` if the axes has one. rows and columns stack
-outer boxes with a gap, `ratios` split the inner sizes of the children without a fixed size, and
-`share` aligns the inner edges across the stack. a stack's own inner box runs from its first
-child's inner edge to its last child's along it, so `Row(Column(a, b, share="x"), bar,
+typst text, and keeps a fixed `width` or `height` if the axes has one. a panel's inner box is its
+outer box. `gap` is the distance between the inner boxes of neighbours, so plots sit `gap` apart
+whatever text hangs off them; their outer boxes must also stay `_CLEARANCE` apart, so decorations
+only push plots further apart where they would collide. an axis label longer than its plot is
+left out of the outer box along its axis and may spill into the gap, with a warning if it hits
+other text.
+
+rows and columns stack their children, `ratios` split the inner sizes of the children without a
+fixed size, and `share` aligns the inner edges across the stack. a stack's own inner box runs from
+its first child's inner edge to its last child's along it, so `Row(Column(a, b, share="x"), bar,
 share="y")` spans the bar from a's top to b's bottom. across a sharing stack it is the shared
 inner edges, so `Column(a, Row(b, bar, share="y"), share="x")` splits a's and b's heights by
-the ratios, not a's height against the row's outer box. the number of ticks depends on the
-rectangle and the margins on the ticks, so the solve repeats until the margins settle.
+the ratios, not a's height against the row's outer box.
 
-panel labels never take space, and colorbars get none. each sits in the top-left corner of its item's outer box (an
-axes's decorations, a panel's drawn content), its left edge on the box's left and its cap height
-on the box's top. then labels across a row share
-the highest top and labels down a column the leftmost left edge.
+a `Grid` is filled by slicing, as matplotlib's gridspec: `g[0, 0] = a`, `g[0:2, 1] = key`. every
+item's inner edges lie on the edges of the rows and columns it spans, so a bar in one column
+lines up with a plot in another, and `heights` / `widths` split the rows and columns without a
+fixed-size item. the number of ticks depends on the rectangle and the margins on the ticks, so
+the solve repeats until the margins settle.
+
+panel labels never take space, and colorbars get none. each sits in the top-left corner of its
+item's outer box (an axes's decorations, a panel's drawn content), its left edge on the box's left
+and its cap height on the box's top. then labels across a row (of a stack or a grid) share the
+highest top and labels down a column the leftmost left edge.
 """
 
 import warnings
 from collections.abc import Iterator
+from itertools import pairwise
 from typing import Literal
 
 import kiwisolver as kiwi
@@ -34,13 +46,16 @@ from fatplotlib.scene import BBox, Group, Node, Text
 from fatplotlib.units import length
 
 type Leaf = Axes | Panel
-type Item = Leaf | Row | Column
+type Item = Leaf | Row | Column | Grid
+type Span = int | slice
 type Margins = tuple[float, float, float, float]
 """left, bottom, right and top distance from an inner box out to its outer box, in pt."""
 
 # the most solves while the margins settle, and the change in pt that counts as settled
 _PASSES = 4
 _SETTLED = 0.01
+# the least space between the outer boxes of neighbours
+_CLEARANCE = "0.25em"
 
 
 class Target:
@@ -92,7 +107,7 @@ class _Stack:
     Attributes:
         children (tuple[Item, ...]): the items, left to right or top to bottom.
         ratios (tuple[float, ...]): the split of inner sizes along the stack.
-        gap (float | str): space between outer boxes, pt or a length such as "1em".
+        gap (float | str): space between the children's inner boxes, pt or a length such as "1em".
         share (Literal["x", "y"] | None): the direction across the stack whose inner edges align.
     """
 
@@ -110,7 +125,7 @@ class _Stack:
         Args:
             *children (Item): the items.
             ratios (tuple[float, ...] | None): the split of inner sizes, equal if None.
-            gap (float | str): space between outer boxes.
+            gap (float | str): space between the children's inner boxes.
             share (Literal["x", "y"] | None): align inner edges across the stack: "y" in a
                 `Row`, "x" in a `Column`.
 
@@ -139,6 +154,77 @@ class Column(_Stack):
     """Children top to bottom; `share="x"` aligns their inner left and right edges."""
 
     across = "x"
+
+
+class Grid:
+    """Items in rows and columns, filled by slicing: `g[0, 0] = a`, `g[0:2, 1] = key`.
+
+    Attributes:
+        rows (int): the number of rows, top to bottom.
+        cols (int): the number of columns, left to right.
+        heights (tuple[float, ...]): the split of inner heights over the rows without a
+            fixed-height item; the entries of fixed rows are ignored.
+        widths (tuple[float, ...]): the split of inner widths over the columns without a
+            fixed-width item.
+        gap (float | str): space between the inner boxes of neighbouring rows and columns.
+        cells (list[tuple[Item, range, range]]): each item with the rows and columns it spans,
+            in the order they were set.
+    """
+
+    def __init__(
+        self,
+        rows: int,
+        cols: int,
+        *,
+        heights: tuple[float, ...] | None = None,
+        widths: tuple[float, ...] | None = None,
+        gap: float | str = "1em",
+    ) -> None:
+        """Sets up an empty grid.
+
+        Args:
+            rows (int): the number of rows.
+            cols (int): the number of columns.
+            heights (tuple[float, ...] | None): the split of inner heights, equal if None.
+            widths (tuple[float, ...] | None): the split of inner widths, equal if None.
+            gap (float | str): space between inner boxes, pt or a length such as "1em".
+
+        Raises:
+            ValueError: heights or widths of the wrong length.
+        """
+        if heights is not None and len(heights) != rows:
+            raise ValueError(f"{len(heights)} heights for {rows} rows")
+        if widths is not None and len(widths) != cols:
+            raise ValueError(f"{len(widths)} widths for {cols} columns")
+        self.rows = rows
+        self.cols = cols
+        self.heights = heights or (1.0,) * rows
+        self.widths = widths or (1.0,) * cols
+        self.gap = gap
+        self.cells: list[tuple[Item, range, range]] = []
+
+    def __setitem__(self, at: tuple[Span, Span], item: Item) -> None:
+        """Puts an item in the rows and columns it spans.
+
+        Args:
+            at (tuple[Span, Span]): a row and a column, each a non-negative index or a slice.
+            item (Item): the item.
+
+        Raises:
+            IndexError: a span empty or past the grid.
+        """
+        spans = []
+        for i, n in zip(at, (self.rows, self.cols)):
+            start, stop = (i.start or 0, n if i.stop is None else i.stop) if isinstance(i, slice) else (i, i + 1)
+            if not 0 <= start < stop <= n or isinstance(i, slice) and i.step not in (None, 1):
+                raise IndexError(f"{at} is not a block of cells in a {self.rows} x {self.cols} grid")
+            spans.append(range(start, stop))
+        self.cells.append((item, *spans))
+
+    @property
+    def children(self) -> list[Item]:
+        """The items, in the order they were set."""
+        return [item for item, _, _ in self.cells]
 
 
 class Figure:
@@ -195,6 +281,7 @@ class Figure:
         _solve(self.root, BBox(pad, pad, width - pad, height - pad), em)
         groups = {id(leaf): leaf.group() for leaf in _leaves(self.root)}
         root = Group(list(groups.values()))
+        _check_spills([leaf for leaf in _leaves(self.root) if isinstance(leaf, Axes)], groups)
         if target.labels:
             root.add(*_labels(self.root, groups, em))
         return root, width, height
@@ -202,7 +289,7 @@ class Figure:
 
 def _leaves(item: Item) -> Iterator[Leaf]:
     """The axes and panels in a layout, depth first."""
-    if isinstance(item, _Stack):
+    if isinstance(item, _Stack | Grid):
         for child in item.children:
             yield from _leaves(child)
     else:
@@ -262,7 +349,7 @@ class _Box:
         self.inner: tuple[kiwi.Expression | kiwi.Variable, ...] = (self.x0 + left, self.y0 + bottom, self.x1 - right, self.y1 - top)
 
 
-def _constrain(root: Item, area: BBox, em: float, margins: dict[int, Margins]) -> dict[int, BBox]:  # noqa: C901 - one block per stack rule
+def _constrain(root: Item, area: BBox, em: float, margins: dict[int, Margins]) -> dict[int, BBox]:
     """Solves the layout once for fixed margins.
 
     Returns:
@@ -270,6 +357,7 @@ def _constrain(root: Item, area: BBox, em: float, margins: dict[int, Margins]) -
     """
     solver = kiwi.Solver()
     boxes: dict[int, _Box] = {}
+    clearance = length(_CLEARANCE, em)
 
     def visit(item: Item) -> _Box:
         """Adds the item's constraints and returns its box."""
@@ -277,48 +365,14 @@ def _constrain(root: Item, area: BBox, em: float, margins: dict[int, Margins]) -
         x0, y0, x1, y1 = box.inner
         solver.addConstraint(x1 >= x0)
         solver.addConstraint(y1 >= y0)
-        if not isinstance(item, _Stack):
-            for constraint in _fixed_sizes(item, box, em):
-                solver.addConstraint(constraint)
-            return box
-        kids = [visit(child) for child in item.children]
-        gap = length(item.gap, em)
-        row = isinstance(item, Row)
-        # the stack's inner box: first child's inner start to last child's inner end along it, and
-        # across it the shared inner edges, or the outer box if the children are not aligned
-        first, last = kids[0].inner, kids[-1].inner
-        if row:
-            bottom, top = (first[1], first[3]) if item.share else (box.y0, box.y1)
-            box.inner = (first[0], bottom, last[2], top)
+        if isinstance(item, _Stack):
+            constraints = _stack(item, box, [visit(child) for child in item.children], length(item.gap, em), clearance)
+        elif isinstance(item, Grid):
+            constraints = _grid(item, box, [visit(child) for child in item.children], length(item.gap, em), clearance)
         else:
-            left, right = (first[0], first[2]) if item.share else (box.x0, box.x1)
-            box.inner = (left, last[1], right, first[3])
-        # along the stack: outer boxes edge to edge with gaps, filling the stack
-        if row:
-            starts, ends = [k.x0 for k in kids], [k.x1 for k in kids]
-            solver.addConstraint(starts[0] == box.x0)
-            solver.addConstraint(ends[-1] == box.x1)
-        else:
-            starts, ends = [k.y1 for k in kids], [k.y0 for k in kids]
-            solver.addConstraint(starts[0] == box.y1)
-            solver.addConstraint(ends[-1] == box.y0)
-        for end, start in zip(ends, starts[1:]):
-            solver.addConstraint((start == end + gap) if row else (start == end - gap))
-        for constraint in _ratios(item, kids):
+            constraints = _fixed_sizes(item, box, em)
+        for constraint in constraints:
             solver.addConstraint(constraint)
-        # across the stack: inside the stack, filling it where alignment allows
-        lo, hi = (1, 3) if row else (0, 2)
-        outer_lo, outer_hi = (box.y0, box.y1) if row else (box.x0, box.x1)
-        for k in kids:
-            k_lo, k_hi = (k.y0, k.y1) if row else (k.x0, k.x1)
-            solver.addConstraint(k_lo >= outer_lo)
-            solver.addConstraint(k_hi <= outer_hi)
-            solver.addConstraint((k_lo == outer_lo) | "medium")
-            solver.addConstraint((k_hi == outer_hi) | "medium")
-        if item.share is not None:
-            for k in kids[1:]:
-                solver.addConstraint((k.inner[lo] == kids[0].inner[lo]) | "strong")
-                solver.addConstraint((k.inner[hi] == kids[0].inner[hi]) | "strong")
         return box
 
     top = visit(root)
@@ -329,6 +383,92 @@ def _constrain(root: Item, area: BBox, em: float, margins: dict[int, Margins]) -
         id(leaf): BBox(*(e.value() for e in boxes[id(leaf)].inner))
         for leaf in _leaves(root)
     }
+
+
+def _stack(item: _Stack, box: _Box, kids: list[_Box], gap: float, clearance: float) -> list[kiwi.Constraint]:
+    """A stack's constraints, and its inner box set from its children's."""
+    row = isinstance(item, Row)
+    # the stack's inner box: first child's inner start to last child's inner end along it, and
+    # across it the shared inner edges, or the outer box if the children are not aligned
+    first, last = kids[0].inner, kids[-1].inner
+    if row:
+        bottom, top = (first[1], first[3]) if item.share else (box.y0, box.y1)
+        box.inner = (first[0], bottom, last[2], top)
+    else:
+        left, right = (first[0], first[2]) if item.share else (box.x0, box.x1)
+        box.inner = (left, last[1], right, first[3])
+    # along the stack: the children fill it, their inner boxes a gap apart
+    constraints = (
+        [kids[0].x0 == box.x0, kids[-1].x1 == box.x1] if row else [kids[0].y1 == box.y1, kids[-1].y0 == box.y0]
+    )
+    for before, after in pairwise(kids):
+        constraints += _gap(before, after, row, gap, clearance)
+    constraints += _ratios(item, kids)
+    # across the stack: inside the stack, filling it where alignment allows
+    lo, hi = (1, 3) if row else (0, 2)
+    for k in kids:
+        constraints += _inside(k, box, edges=(not row, row, not row, row))
+    if item.share is not None:
+        for k in kids[1:]:
+            constraints.append((k.inner[lo] == kids[0].inner[lo]) | "strong")
+            constraints.append((k.inner[hi] == kids[0].inner[hi]) | "strong")
+    return constraints
+
+
+def _grid(item: Grid, box: _Box, kids: list[_Box], gap: float, clearance: float) -> list[kiwi.Constraint]:  # noqa: C901 - one block per grid rule
+    """A grid's constraints, and its inner box set from its rows' and columns' edges."""
+    # inner bottom and top of each row, left and right of each column
+    rows = [(kiwi.Variable(), kiwi.Variable()) for _ in range(item.rows)]
+    cols = [(kiwi.Variable(), kiwi.Variable()) for _ in range(item.cols)]
+    box.inner = (cols[0][0], rows[-1][0], cols[-1][1], rows[0][1])
+    constraints: list[kiwi.Constraint] = []
+    for (bottom, _), (_, lower_top) in pairwise(rows):
+        constraints.append((lower_top == bottom - gap) | "strong")
+    for (_, right), (next_left, _) in pairwise(cols):
+        constraints.append((next_left == right + gap) | "strong")
+    for bottom, top in rows:
+        constraints.append(top >= bottom)
+    for left, right in cols:
+        constraints.append(right >= left)
+    for k, (child, rs, cs) in zip(kids, item.cells):
+        # inner edges on the spanned rows and columns, the outer box inside the grid
+        edges = (cols[cs[0]][0], rows[rs[-1]][0], cols[cs[-1]][1], rows[rs[0]][1])
+        constraints += [(inner == edge) | "strong" for inner, edge in zip(k.inner, edges)]
+        constraints += _inside(k, box, edges=(cs[0] == 0, rs[-1] == item.rows - 1, cs[-1] == item.cols - 1, rs[0] == 0))
+    # neighbours in adjacent rows (columns) that overlap in columns (rows) keep their outer boxes apart
+    for k, (_, rs, cs) in zip(kids, item.cells):
+        for other, (_, other_rs, other_cs) in zip(kids, item.cells):
+            if other_rs[0] == rs[-1] + 1 and set(cs) & set(other_cs):
+                constraints.append(other.y1 <= k.y0 - clearance)
+            if other_cs[0] == cs[-1] + 1 and set(rs) & set(other_rs):
+                constraints.append(other.x0 >= k.x1 + clearance)
+    # ratios among the rows and columns no single-cell item fixes the size of
+    for row, sizes, ratios in ((False, rows, item.heights), (True, cols, item.widths)):
+        fixed = {
+            (cs if row else rs)[0]
+            for child, rs, cs in item.cells
+            if len(cs if row else rs) == 1 and _fixed(child, row) is not None
+        }
+        free = [(end - start, ratio) for i, ((start, end), ratio) in enumerate(zip(sizes, ratios)) if i not in fixed]
+        constraints += [(size * free[0][1] == free[0][0] * ratio) | "strong" for size, ratio in free[1:]]
+    return constraints
+
+
+def _gap(before: _Box, after: _Box, row: bool, gap: float, clearance: float) -> list[kiwi.Constraint]:
+    """Neighbours along a row (or down a column): inner boxes a gap apart, strong, and outer
+    boxes at least the clearance apart, required."""
+    if row:
+        return [(after.inner[0] == before.inner[2] + gap) | "strong", after.x0 >= before.x1 + clearance]
+    return [(after.inner[3] == before.inner[1] - gap) | "strong", after.y1 <= before.y0 - clearance]
+
+
+def _inside(k: _Box, box: _Box, edges: tuple[bool, bool, bool, bool]) -> list[kiwi.Constraint]:
+    """A child's outer box inside its parent's, and on the parent's left, bottom, right and top
+    edges where `edges` says, medium so alignment wins."""
+    constraints = [k.x0 >= box.x0, k.y0 >= box.y0, k.x1 <= box.x1, k.y1 <= box.y1]
+    pairs = ((k.x0, box.x0), (k.y0, box.y0), (k.x1, box.x1), (k.y1, box.y1))
+    constraints += [(mine == theirs) | "medium" for (mine, theirs), on in zip(pairs, edges) if on]
+    return constraints
 
 
 def _fixed(item: Item, row: bool) -> float | str | None:
@@ -397,21 +537,38 @@ def _outer(leaf: Leaf, group: Group) -> BBox:
 
 def _align(item: Item, corners: dict[int, list[float]]) -> None:
     """Gives labels across each row the highest top and down each column the leftmost left."""
-    if not isinstance(item, _Stack):
+    if isinstance(item, Grid):
+        for i in range(item.rows):
+            _share(
+                [leaf for child, rs, _ in item.cells if rs[0] == i for leaf in _edge(child, True)], corners, top=True
+            )
+        for j in range(item.cols):
+            _share(
+                [leaf for child, _, cs in item.cells if cs[0] == j for leaf in _edge(child, False)], corners, top=False
+            )
+    elif isinstance(item, _Stack):
+        row = isinstance(item, Row)
+        _share([leaf for child in item.children for leaf in _edge(child, row)], corners, top=row)
+    else:
         return
-    row = isinstance(item, Row)
-    edge = [leaf for child in item.children for leaf in _edge(child, row) if id(leaf) in corners]
-    if edge:
-        i, pick = (1, max) if row else (0, min)
-        value = pick(corners[id(leaf)][i] for leaf in edge)
-        for leaf in edge:
-            corners[id(leaf)][i] = value
     for child in item.children:
         _align(child, corners)
 
 
+def _share(leaves: list[Leaf], corners: dict[int, list[float]], top: bool) -> None:
+    """Gives the labelled leaves the highest top (top=True) or the leftmost left."""
+    edge = [leaf for leaf in leaves if id(leaf) in corners]
+    if edge:
+        i, pick = (1, max) if top else (0, min)
+        value = pick(corners[id(leaf)][i] for leaf in edge)
+        for leaf in edge:
+            corners[id(leaf)][i] = value
+
+
 def _edge(item: Item, top: bool) -> list[Leaf]:
     """The leaves along an item's top edge (top=True) or left edge."""
+    if isinstance(item, Grid):
+        return [leaf for child, rs, cs in item.cells if (rs if top else cs)[0] == 0 for leaf in _edge(child, top)]
     if not isinstance(item, _Stack):
         return [item]
     # a stack along the edge contributes all its children, one across it only its first
@@ -430,6 +587,18 @@ def _check_overlaps(labels: list[Text], scene: Group, leaves: list[Leaf]) -> Non
             if hit is not None and hit.width > 0 and hit.height > 0:
                 warnings.warn(f"panel label {label.markup} overlaps other content", stacklevel=3)
                 break
+
+
+def _check_spills(axes: list[Axes], groups: dict[int, Group]) -> None:
+    """Warns when an axis label spilling past its plot overlaps another leaf's text."""
+    for leaf in axes:
+        others = [box for key, group in groups.items() if key != id(leaf) for box in _text_boxes(group)]
+        for spill in leaf.spills():
+            for other in others:
+                hit = spill.intersection(other)
+                if hit is not None and hit.width > 0 and hit.height > 0:
+                    warnings.warn("an axis label longer than its plot overlaps other text", stacklevel=3)
+                    break
 
 
 def _text_boxes(node: Node) -> Iterator[BBox]:
